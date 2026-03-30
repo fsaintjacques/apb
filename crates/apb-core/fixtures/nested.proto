@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package fixtures;
+
+message Inner {
+  string value = 1;
+  int32 count = 2;
+}
+
+enum Status {
+  STATUS_UNKNOWN = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_INACTIVE = 2;
+}
+
+message Nested {
+  // Nested message
+  Inner inner = 1;
+
+  // Repeated scalar
+  repeated int32 tags = 2;
+
+  // Repeated message
+  repeated Inner items = 3;
+
+  // Map field
+  map<string, int64> metadata = 4;
+
+  // Oneof
+  oneof choice {
+    string text_value = 5;
+    int32 int_value = 6;
+    Inner message_value = 7;
+  }
+
+  // Enum field
+  Status status = 8;
+}

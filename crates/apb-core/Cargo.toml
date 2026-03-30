@@ -1,0 +1,11 @@
+[package]
+name = "apb-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+prost-reflect = "0.14"
+thiserror = "2"
+

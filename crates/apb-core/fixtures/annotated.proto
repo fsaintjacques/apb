@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package fixtures;
+
+import "apb.proto";
+
+message Annotated {
+  // Annotation overrides the Arrow column name.
+  string user_id = 1 [(apb.apb).arrow_name = "uid"];
+  // Coercion enabled via annotation.
+  int32 count = 2 [(apb.apb).coerce = true];
+  // No annotation — uses name-match.
+  string name = 3;
+}

@@ -1,15 +1,10 @@
-use prost::Message;
 use prost_reflect::{DescriptorPool, MessageDescriptor};
-use prost_types::FileDescriptorSet;
 
 /// Errors from parsing or querying proto descriptors.
 #[derive(Debug, thiserror::Error)]
 pub enum DescriptorError {
-    #[error("failed to decode FileDescriptorSet: {0}")]
-    DecodeFailed(#[from] prost::DecodeError),
-
-    #[error("failed to build descriptor pool: {0}")]
-    PoolError(#[from] prost_reflect::DescriptorError),
+    #[error("failed to decode descriptor: {0}")]
+    DecodeFailed(#[from] prost_reflect::DescriptorError),
 
     #[error("message not found: {0}")]
     MessageNotFound(String),
@@ -23,11 +18,28 @@ pub struct ProtoSchema {
     pool: DescriptorPool,
 }
 
+/// Embedded apb.proto extension descriptor, so custom field options are
+/// resolvable when parsing user descriptors that don't include apb.proto.
+const APB_EXTENSION_BYTES: &[u8] = include_bytes!("../../../../proto/apb/apb.bin");
+
 impl ProtoSchema {
     /// Parse from serialized `FileDescriptorSet` bytes.
+    ///
+    /// The apb extension descriptors are automatically added to the pool
+    /// so that custom field options (e.g. `(apb).arrow_name`) are resolvable.
+    /// If the user's descriptor already includes apb.proto (via
+    /// `--include_imports`), the duplicate is silently ignored.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DescriptorError> {
-        let fds = FileDescriptorSet::decode(bytes)?;
-        let pool = DescriptorPool::from_file_descriptor_set(fds)?;
+        // Use decode_file_descriptor_set which takes raw bytes and preserves
+        // extension data in field options (unlike from_file_descriptor_set
+        // which goes through prost_types and strips unknown fields).
+        //
+        // First load the apb extension so custom options are resolvable.
+        let mut pool = DescriptorPool::new();
+        pool.decode_file_descriptor_set(APB_EXTENSION_BYTES)?;
+        // Then add user descriptors. If they already include apb.proto
+        // (via --include_imports), the duplicate file is silently skipped.
+        pool.decode_file_descriptor_set(bytes)?;
         Ok(Self { pool })
     }
 

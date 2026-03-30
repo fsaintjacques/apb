@@ -248,7 +248,7 @@ pub fn resolve_type_check(
 mod tests {
     use super::*;
     use arrow_schema::{DataType, TimeUnit};
-    use prost_reflect::{DescriptorPool, EnumDescriptor, MessageDescriptor};
+    use prost_reflect::{DescriptorPool, EnumDescriptor};
 
     fn make_pool(bytes: &[u8]) -> DescriptorPool {
         let fds =

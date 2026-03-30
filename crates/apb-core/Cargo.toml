@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+arrow-array = "55"
+arrow-buffer = "55"
 arrow-schema = "55"
 prost = "0.13"
 prost-types = "0.13"

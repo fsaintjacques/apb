@@ -166,6 +166,17 @@ fn check_resolved(arrow_type: &DataType, proto_kind: &Kind) -> TypeCompatibility
         // === Coercions: float widening ===
         (Float32, Kind::Double) => CoercionAvailable { risk: CoercionRisk::Lossless },
 
+        // === Lossless: temporal → well-known proto types ===
+        // Arrow Timestamp → google.protobuf.Timestamp: the transcoder converts
+        // the Arrow value (in its TimeUnit) to seconds + nanos. Lossless.
+        (Timestamp(_, _), Kind::Message(desc)) if desc.full_name() == "google.protobuf.Timestamp" => {
+            Compatible
+        }
+        // Arrow Duration → google.protobuf.Duration: same seconds + nanos split.
+        (Duration(_), Kind::Message(desc)) if desc.full_name() == "google.protobuf.Duration" => {
+            Compatible
+        }
+
         // === Coercions: temporal → integer ===
         // Note: timezone information (if present) is silently discarded.
         // The raw epoch value is used as-is; the unit (seconds, millis, micros,
@@ -237,21 +248,35 @@ pub fn resolve_type_check(
 mod tests {
     use super::*;
     use arrow_schema::{DataType, TimeUnit};
-    use prost_reflect::{DescriptorPool, EnumDescriptor};
+    use prost_reflect::{DescriptorPool, EnumDescriptor, MessageDescriptor};
 
-    // Helper to get a real EnumDescriptor from our test fixtures.
+    fn make_pool(bytes: &[u8]) -> DescriptorPool {
+        let fds =
+            <prost_types::FileDescriptorSet as prost::Message>::decode(bytes).unwrap();
+        DescriptorPool::from_file_descriptor_set(fds).unwrap()
+    }
+
     fn test_enum_descriptor() -> EnumDescriptor {
-        let bytes = include_bytes!("../../fixtures/nested.bin");
-        let pool = {
-            let fds =
-                <prost_types::FileDescriptorSet as prost::Message>::decode(&bytes[..]).unwrap();
-            DescriptorPool::from_file_descriptor_set(fds).unwrap()
-        };
+        let pool = make_pool(include_bytes!("../../fixtures/nested.bin"));
         pool.get_enum_by_name("fixtures.Status").unwrap()
     }
 
     fn enum_kind() -> Kind {
         Kind::Enum(test_enum_descriptor())
+    }
+
+    fn wellknown_pool() -> DescriptorPool {
+        make_pool(include_bytes!("../../fixtures/wellknown.bin"))
+    }
+
+    fn timestamp_message_kind() -> Kind {
+        let pool = wellknown_pool();
+        Kind::Message(pool.get_message_by_name("google.protobuf.Timestamp").unwrap())
+    }
+
+    fn duration_message_kind() -> Kind {
+        let pool = wellknown_pool();
+        Kind::Message(pool.get_message_by_name("google.protobuf.Duration").unwrap())
     }
 
     // ==================== Lossless pairs ====================
@@ -539,12 +564,73 @@ mod tests {
         }
     }
 
+    // ==================== Well-known types ====================
+
+    #[test]
+    fn compatible_timestamp_to_wellknown_timestamp() {
+        let kind = timestamp_message_kind();
+        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+            let dt = DataType::Timestamp(unit, None);
+            assert_eq!(
+                check_compatibility(&dt, &kind),
+                TypeCompatibility::Compatible,
+                "Timestamp({unit:?}) → google.protobuf.Timestamp",
+            );
+        }
+    }
+
+    #[test]
+    fn compatible_timestamp_with_tz_to_wellknown_timestamp() {
+        let kind = timestamp_message_kind();
+        let dt = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        assert_eq!(
+            check_compatibility(&dt, &kind),
+            TypeCompatibility::Compatible,
+        );
+    }
+
+    #[test]
+    fn compatible_duration_to_wellknown_duration() {
+        let kind = duration_message_kind();
+        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+            let dt = DataType::Duration(unit);
+            assert_eq!(
+                check_compatibility(&dt, &kind),
+                TypeCompatibility::Compatible,
+                "Duration({unit:?}) → google.protobuf.Duration",
+            );
+        }
+    }
+
+    #[test]
+    fn incompatible_duration_to_random_message() {
+        // Duration should not match arbitrary messages, only google.protobuf.Duration.
+        let pool = wellknown_pool();
+        let msg = pool.get_message_by_name("fixtures.WithWellKnown").unwrap();
+        let kind = Kind::Message(msg);
+        assert!(matches!(
+            check_compatibility(&DataType::Duration(TimeUnit::Microsecond), &kind),
+            TypeCompatibility::Incompatible { .. },
+        ));
+    }
+
+    #[test]
+    fn incompatible_timestamp_to_random_message() {
+        let pool = wellknown_pool();
+        let msg = pool.get_message_by_name("fixtures.WithWellKnown").unwrap();
+        let kind = Kind::Message(msg);
+        let dt = DataType::Timestamp(TimeUnit::Microsecond, None);
+        assert!(matches!(
+            check_compatibility(&dt, &kind),
+            TypeCompatibility::Incompatible { .. },
+        ));
+    }
+
     // ==================== Incompatible pairs ====================
 
     #[test]
     fn incompatible_unsupported_arrow_types() {
         let unsupported = [
-            DataType::Duration(TimeUnit::Microsecond),
             DataType::Decimal128(10, 2),
             DataType::Decimal256(10, 2),
             DataType::Null,

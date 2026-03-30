@@ -67,11 +67,23 @@ Arrow data from Parquet and BigQuery.
 For proto `enum` fields specifically, `Dictionary(Int*, Utf8)` resolves to
 the `Utf8 → enum` coercion path (name lookup).
 
+### Well-known proto types
+
+These map Arrow temporal types to proto messages (not scalars):
+
+| Arrow type | Proto type | Compatibility |
+|-----------|-----------|---------------|
+| `Timestamp(*, *)` | `google.protobuf.Timestamp` | Compatible (lossless, unit converted to seconds + nanos) |
+| `Duration(*)` | `google.protobuf.Duration` | Compatible (lossless, unit converted to seconds + nanos) |
+
+These are handled as special cases in `check_compatibility` — an Arrow scalar
+mapping to a specific proto message.
+
 ### Not supported
 
 | Arrow type | Notes |
 |-----------|-------|
-| `Duration`, `Interval` | No natural proto equivalent. |
+| `Interval` | No natural proto equivalent. |
 | `Decimal128`, `Decimal256` | No proto equivalent. |
 | `Null` | No proto equivalent. |
 

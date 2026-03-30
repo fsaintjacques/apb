@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package fixtures;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+message WithWellKnown {
+  google.protobuf.Timestamp created_at = 1;
+  google.protobuf.Duration elapsed = 2;
+  string name = 3;
+}

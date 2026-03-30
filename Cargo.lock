@@ -16,6 +16,7 @@ version = "0.1.0"
 name = "apb-core"
 version = "0.1.0"
 dependencies = [
+ "arrow-schema",
  "prost",
  "prost-reflect",
  "prost-types",
@@ -25,6 +26,12 @@ dependencies = [
 [[package]]
 name = "apb-source"
 version = "0.1.0"
+
+[[package]]
+name = "arrow-schema"
+version = "55.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af7686986a3bf2254c9fb130c623cdcb2f8e1f15763e7c71c310f0834da3d292"
 
 [[package]]
 name = "bytes"

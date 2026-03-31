@@ -6,11 +6,11 @@ pub mod wire;
 
 pub use plan::PlanError;
 
-use arrow_array::{Array, BinaryArray, RecordBatch};
+use arrow_array::{Array, BinaryArray, ListArray, LargeListArray, MapArray, RecordBatch, StructArray};
 use arrow_buffer::{Buffer, OffsetBuffer};
 
 use crate::mapping::FieldMapping;
-use plan::EncodingPlan;
+use plan::{EncoderEntry, EncodingPlan, FieldEncoder, FieldEncoderKind, MapEncoder, MessageEncoder, OneofEncoder, RepeatedEncoder};
 
 /// Error during transcoding.
 #[derive(Debug, thiserror::Error)]
@@ -25,84 +25,64 @@ pub enum TranscodeError {
         proto_field: String,
         reason: String,
     },
+
+    #[error("row {row}, oneof '{oneof_name}': multiple variants set: {}", set_variants.join(", "))]
+    OneofMultipleSet {
+        row: usize,
+        oneof_name: String,
+        set_variants: Vec<String>,
+    },
 }
 
 /// A compiled transcoder that converts Arrow `RecordBatch`es into serialized
 /// protobuf messages.
-///
-/// Built once from a `FieldMapping`. Precomputes wire tags, encoder functions,
-/// and null handling. Reusable across batches within a stream.
 pub struct Transcoder {
     plan: EncodingPlan,
-    /// Scratch buffer for delimited output (reused across rows).
-    scratch: Vec<u8>,
 }
 
 impl Transcoder {
     /// Build a transcoder from a validated field mapping.
-    ///
-    /// Returns error if the mapping contains unsupported field shapes
-    /// (nested types are not yet supported).
     pub fn new(mapping: &FieldMapping) -> Result<Self, TranscodeError> {
         let plan = EncodingPlan::from_mapping(mapping)?;
-        Ok(Self {
-            plan,
-            scratch: Vec::with_capacity(256),
-        })
+        Ok(Self { plan })
     }
 
     /// Transcode a batch into varint-delimited protobuf messages.
-    ///
-    /// Each row is encoded as a complete proto message with a varint length
-    /// prefix. Appends to `output` — does not clear it.
     pub fn transcode_delimited(
-        &mut self,
+        &self,
         batch: &RecordBatch,
         output: &mut Vec<u8>,
     ) -> Result<(), TranscodeError> {
-        let arrays: Vec<_> = self
-            .plan
-            .field_encoders
-            .iter()
-            .map(|e| batch.column(e.arrow_index).as_ref())
-            .collect();
+        let mut msg_buf = Vec::with_capacity(256);
 
         for row in 0..batch.num_rows() {
-            self.scratch.clear();
-            self.encode_row(row, &arrays)?;
+            msg_buf.clear();
+            encode_message_fields(&mut msg_buf, row, batch.columns(), &self.plan)?;
 
-            // Write length prefix + message bytes.
-            wire::encode_varint(self.scratch.len() as u64, output);
-            output.extend_from_slice(&self.scratch);
+            wire::encode_varint(msg_buf.len() as u64, output);
+            output.extend_from_slice(&msg_buf);
         }
 
         Ok(())
     }
 
     /// Transcode a batch into an Arrow `BinaryArray`.
-    ///
-    /// Each element is one serialized proto message. No length prefix.
     pub fn transcode_arrow(
-        &mut self,
+        &self,
         batch: &RecordBatch,
     ) -> Result<BinaryArray, TranscodeError> {
         let num_rows = batch.num_rows();
-        let arrays: Vec<_> = self
-            .plan
-            .field_encoders
-            .iter()
-            .map(|e| batch.column(e.arrow_index).as_ref())
-            .collect();
-
+        let mut msg_buf = Vec::with_capacity(256);
         let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
         let mut payload: Vec<u8> = Vec::new();
 
         offsets.push(0);
 
         for row in 0..num_rows {
-            self.scratch.clear();
-            self.encode_row(row, &arrays)?;
-            payload.extend_from_slice(&self.scratch);
+            msg_buf.clear();
+            encode_message_fields(&mut msg_buf, row, batch.columns(), &self.plan)?;
+
+            payload.extend_from_slice(&msg_buf);
             if payload.len() > i32::MAX as usize {
                 return Err(TranscodeError::FieldError {
                     row,
@@ -116,38 +96,295 @@ impl Transcoder {
 
         let offsets = OffsetBuffer::new(offsets.into());
         let values = Buffer::from(payload);
-        let array = BinaryArray::new(offsets, values, None);
-        Ok(array)
+        Ok(BinaryArray::new(offsets, values, None))
+    }
+}
+
+/// Encode all fields of a message into `buf`.
+fn encode_message_fields(
+    buf: &mut Vec<u8>,
+    row: usize,
+    columns: &[std::sync::Arc<dyn Array>],
+    plan: &EncodingPlan,
+) -> Result<(), TranscodeError> {
+    for entry in &plan.encoders {
+        match entry {
+            EncoderEntry::Field(encoder) => {
+                let array = columns[encoder.arrow_index].as_ref();
+                if encoder.nullable && array.is_null(row) {
+                    continue;
+                }
+                encode_field(buf, row, array, encoder)?;
+            }
+            EncoderEntry::Oneof(oneof_enc) => {
+                let struct_array = columns[oneof_enc.arrow_index]
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .expect("oneof column should be StructArray");
+                encode_oneof(buf, row, struct_array, oneof_enc)?;
+            }
+        }
     }
 
-    /// Encode a single row into `self.scratch`.
-    fn encode_row(
-        &mut self,
-        row: usize,
-        arrays: &[&dyn Array],
-    ) -> Result<(), TranscodeError> {
-        for (i, encoder) in self.plan.field_encoders.iter().enumerate() {
-            let array = arrays[i];
+    Ok(())
+}
 
-            // Skip null values — proto default.
-            if encoder.nullable && array.is_null(row) {
-                continue;
-            }
+/// Encode a single field value (with tag) into `buf`.
+fn encode_field(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    encoder: &FieldEncoder,
+) -> Result<(), TranscodeError> {
+    match &encoder.kind {
+        FieldEncoderKind::Scalar(encode_fn) => {
+            buf.extend_from_slice(&encoder.tag);
+            encode_fn(array, row, buf).map_err(|e| TranscodeError::FieldError {
+                row,
+                arrow_field: encoder.arrow_name.clone(),
+                proto_field: encoder.proto_name.clone(),
+                reason: e.reason,
+            })?;
+        }
+        FieldEncoderKind::Message(msg_enc) => {
+            buf.extend_from_slice(&encoder.tag);
+            encode_nested_message_body(buf, row, array, msg_enc)?;
+        }
+        FieldEncoderKind::Repeated(rep_enc) => {
+            encode_repeated(buf, row, array, rep_enc, &encoder.proto_name)?;
+        }
+        FieldEncoderKind::Map(map_enc) => {
+            encode_map(buf, row, array, &encoder.tag, map_enc, &encoder.proto_name)?;
+        }
+    }
+    Ok(())
+}
 
-            // Write tag.
-            self.scratch.extend_from_slice(&encoder.tag);
+/// Encode a nested message body as a length-delimited value (no tag).
+///
+/// Caller is responsible for writing the field tag before calling this.
+fn encode_nested_message_body(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    msg_enc: &MessageEncoder,
+) -> Result<(), TranscodeError> {
+    let struct_array = array
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("nested message column should be StructArray");
 
-            // Write value.
-            (encoder.encode_fn)(array, row, &mut self.scratch).map_err(|e| {
-                TranscodeError::FieldError {
-                    row,
-                    arrow_field: encoder.arrow_name.clone(),
-                    proto_field: encoder.proto_name.clone(),
-                    reason: e.reason,
-                }
+    let child_columns: Vec<_> = (0..struct_array.num_columns())
+        .map(|i| struct_array.column(i).clone())
+        .collect();
+
+    let mut nested_buf = Vec::new();
+    encode_message_fields(&mut nested_buf, row, &child_columns, &msg_enc.sub_plan)?;
+
+    wire::encode_length_delimited(&nested_buf, buf);
+
+    Ok(())
+}
+
+/// Encode a repeated field (ListArray → repeated proto field).
+fn encode_repeated(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    rep_enc: &RepeatedEncoder,
+    field_name: &str,
+) -> Result<(), TranscodeError> {
+    let (values, start, end) = if let Some(list) = array.as_any().downcast_ref::<ListArray>() {
+        let offsets = list.offsets();
+        let s = offsets[row] as usize;
+        let e = offsets[row + 1] as usize;
+        (list.values().as_ref(), s, e)
+    } else if let Some(list) = array.as_any().downcast_ref::<LargeListArray>() {
+        let offsets = list.offsets();
+        let s = offsets[row] as usize;
+        let e = offsets[row + 1] as usize;
+        (list.values().as_ref(), s, e)
+    } else {
+        panic!("repeated field should be ListArray or LargeListArray");
+    };
+
+    if start == end {
+        return Ok(());
+    }
+
+    if rep_enc.packed {
+        // Packed encoding: single length-delimited field with all values.
+        let mut packed_buf = Vec::new();
+        let encode_fn = match &*rep_enc.element_kind {
+            FieldEncoderKind::Scalar(f) => f,
+            _ => unreachable!("packed encoding is only set for scalar elements"),
+        };
+        for i in start..end {
+            encode_fn(values, i, &mut packed_buf).map_err(|e| TranscodeError::FieldError {
+                row,
+                arrow_field: field_name.to_string(),
+                proto_field: format!("{}[{}]", field_name, i - start),
+                reason: e.reason,
             })?;
         }
 
-        Ok(())
+        buf.extend_from_slice(&rep_enc.packed_tag);
+        wire::encode_length_delimited(&packed_buf, buf);
+    } else {
+        // Unpacked: each element gets its own tag.
+        let element_tag = wire::encode_tag(rep_enc.field_number, rep_enc.element_wire_type);
+        for i in start..end {
+            match &*rep_enc.element_kind {
+                FieldEncoderKind::Scalar(encode_fn) => {
+                    buf.extend_from_slice(&element_tag);
+                    encode_fn(values, i, buf).map_err(|e| TranscodeError::FieldError {
+                        row,
+                        arrow_field: field_name.to_string(),
+                        proto_field: format!("{}[{}]", field_name, i - start),
+                        reason: e.reason,
+                    })?;
+                }
+                FieldEncoderKind::Message(msg_enc) => {
+                    buf.extend_from_slice(&element_tag);
+                    encode_nested_message_body(buf, i, values, msg_enc)?;
+                }
+                _ => {
+                    return Err(TranscodeError::FieldError {
+                        row,
+                        arrow_field: field_name.to_string(),
+                        proto_field: field_name.to_string(),
+                        reason: "unsupported repeated element type".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Encode a map field (MapArray → repeated entry messages).
+fn encode_map(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    tag: &[u8],
+    map_enc: &MapEncoder,
+    field_name: &str,
+) -> Result<(), TranscodeError> {
+    let map_array = array
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .expect("map field should be MapArray");
+
+    let offsets = map_array.offsets();
+    let start = offsets[row] as usize;
+    let end = offsets[row + 1] as usize;
+
+    let keys = map_array.keys();
+    let values = map_array.values();
+
+    for i in start..end {
+        let mut entry_buf = Vec::new();
+
+        // Key (field 1) — proto map keys are always scalars.
+        entry_buf.extend_from_slice(&map_enc.key_tag);
+        match &*map_enc.key_kind {
+            FieldEncoderKind::Scalar(encode_fn) => {
+                encode_fn(keys.as_ref(), i, &mut entry_buf).map_err(|e| TranscodeError::FieldError {
+                    row,
+                    arrow_field: format!("{field_name}[{}].key", i - start),
+                    proto_field: format!("{field_name}[{}].key", i - start),
+                    reason: e.reason,
+                })?;
+            }
+            _ => unreachable!("proto map keys must be scalar types"),
+        }
+
+        // Value (field 2).
+        if !values.is_null(i) {
+            entry_buf.extend_from_slice(&map_enc.value_tag);
+            match &*map_enc.value_kind {
+                FieldEncoderKind::Scalar(encode_fn) => {
+                    encode_fn(values.as_ref(), i, &mut entry_buf).map_err(|e| TranscodeError::FieldError {
+                        row,
+                        arrow_field: format!("{field_name}[{}].value", i - start),
+                        proto_field: format!("{field_name}[{}].value", i - start),
+                        reason: e.reason,
+                    })?;
+                }
+                FieldEncoderKind::Message(msg_enc) => {
+                    // Tag already written above; just write the body.
+                    encode_nested_message_body(&mut entry_buf, i, values.as_ref(), msg_enc)?;
+                }
+                _ => {
+                    return Err(TranscodeError::FieldError {
+                        row,
+                        arrow_field: field_name.to_string(),
+                        proto_field: format!("{field_name}[{}].value", i - start),
+                        reason: "unsupported map value type".to_string(),
+                    });
+                }
+            }
+        }
+
+        buf.extend_from_slice(tag);
+        wire::encode_length_delimited(&entry_buf, buf);
+    }
+
+    Ok(())
+}
+
+/// Encode a oneof group (StructArray with nullable children).
+fn encode_oneof(
+    buf: &mut Vec<u8>,
+    row: usize,
+    struct_array: &StructArray,
+    oneof_enc: &OneofEncoder,
+) -> Result<(), TranscodeError> {
+    let mut set_variants = Vec::new();
+
+    for variant in &oneof_enc.variants {
+        let child = struct_array.column(variant.arrow_child_index);
+        if !child.is_null(row) {
+            set_variants.push(variant);
+        }
+    }
+
+    match set_variants.len() {
+        0 => Ok(()),
+        1 => {
+            let variant = set_variants[0];
+            let child = struct_array.column(variant.arrow_child_index);
+            buf.extend_from_slice(&variant.tag);
+            match &*variant.kind {
+                FieldEncoderKind::Scalar(encode_fn) => {
+                    encode_fn(child.as_ref(), row, buf).map_err(|e| TranscodeError::FieldError {
+                        row,
+                        arrow_field: variant.proto_name.clone(),
+                        proto_field: variant.proto_name.clone(),
+                        reason: e.reason,
+                    })?;
+                }
+                FieldEncoderKind::Message(msg_enc) => {
+                    // Tag already written above; just write the body.
+                    encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;
+                }
+                _ => {
+                    return Err(TranscodeError::FieldError {
+                        row,
+                        arrow_field: variant.proto_name.clone(),
+                        proto_field: variant.proto_name.clone(),
+                        reason: "unsupported oneof variant type".to_string(),
+                    });
+                }
+            }
+            Ok(())
+        }
+        _ => Err(TranscodeError::OneofMultipleSet {
+            row,
+            oneof_name: oneof_enc.oneof_name.clone(),
+            set_variants: set_variants.iter().map(|v| v.proto_name.clone()).collect(),
+        }),
     }
 }

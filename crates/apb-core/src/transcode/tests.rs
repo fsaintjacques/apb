@@ -8,10 +8,18 @@ use crate::descriptor::ProtoSchema;
 use crate::mapping::{infer_mapping, InferOptions};
 use super::*;
 
+use arrow_array::builder::*;
+use arrow_schema::Fields;
+
 const SCALARS_BIN: &[u8] = include_bytes!("../../fixtures/scalars.bin");
+const NESTED_BIN: &[u8] = include_bytes!("../../fixtures/nested.bin");
 
 fn scalars_schema() -> ProtoSchema {
     ProtoSchema::from_bytes(SCALARS_BIN).unwrap()
+}
+
+fn nested_schema() -> ProtoSchema {
+    ProtoSchema::from_bytes(NESTED_BIN).unwrap()
 }
 
 /// Helper: build a transcoder from Arrow schema + proto message name.
@@ -69,9 +77,9 @@ fn roundtrip_bool() {
         vec![Arc::new(BooleanArray::from(vec![true, false]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     assert_eq!(messages.len(), 2);
@@ -99,9 +107,9 @@ fn roundtrip_int32() {
         vec![Arc::new(Int32Array::from(vec![0, 42, -1, i32::MAX, i32::MIN]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     assert_eq!(messages.len(), 5);
@@ -123,9 +131,9 @@ fn roundtrip_int64() {
         vec![Arc::new(Int64Array::from(vec![0i64, 123456789, -1]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -142,9 +150,9 @@ fn roundtrip_uint32() {
         vec![Arc::new(UInt32Array::from(vec![0u32, 42, u32::MAX]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[2], &schema, "fixtures.Scalars");
@@ -161,9 +169,9 @@ fn roundtrip_uint64() {
         vec![Arc::new(UInt64Array::from(vec![0u64, u64::MAX]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -180,9 +188,9 @@ fn roundtrip_float32() {
         vec![Arc::new(Float32Array::from(vec![3.14f32, 0.0, -1.5]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[0], &schema, "fixtures.Scalars");
@@ -200,9 +208,9 @@ fn roundtrip_float64() {
         vec![Arc::new(Float64Array::from(vec![3.14159265358979]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[0], &schema, "fixtures.Scalars");
@@ -220,9 +228,9 @@ fn roundtrip_string() {
         vec![Arc::new(StringArray::from(vec!["hello", "", "world"]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[0], &schema, "fixtures.Scalars");
@@ -239,9 +247,9 @@ fn roundtrip_bytes() {
         vec![Arc::new(BinaryArray::from(vec![b"data".as_ref(), b"", b"\x00\x01"]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[0], &schema, "fixtures.Scalars");
@@ -260,9 +268,9 @@ fn roundtrip_sint32() {
         vec![Arc::new(Int32Array::from(vec![0, -1, 1, i32::MIN, i32::MAX]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -282,9 +290,9 @@ fn roundtrip_sint64() {
         vec![Arc::new(Int64Array::from(vec![0i64, -1, i64::MIN]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -301,9 +309,9 @@ fn roundtrip_sfixed32() {
         vec![Arc::new(Int32Array::from(vec![0, -1, 42]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -320,9 +328,9 @@ fn roundtrip_sfixed64() {
         vec![Arc::new(Int64Array::from(vec![0i64, -1, 42]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -339,9 +347,9 @@ fn roundtrip_fixed32() {
         vec![Arc::new(UInt32Array::from(vec![0u32, 42, u32::MAX]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -358,9 +366,9 @@ fn roundtrip_fixed64() {
         vec![Arc::new(UInt64Array::from(vec![0u64, 42, u64::MAX]))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg = decode_message(&messages[1], &schema, "fixtures.Scalars");
@@ -387,9 +395,9 @@ fn roundtrip_multiple_fields() {
         ],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     assert_eq!(messages.len(), 1);
@@ -418,9 +426,9 @@ fn null_fields_skipped() {
         ],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     assert_eq!(messages.len(), 2);
@@ -445,9 +453,9 @@ fn empty_batch() {
         vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     assert!(output.is_empty());
 }
@@ -470,7 +478,7 @@ fn arrow_output_basic() {
         ],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let result = transcoder.transcode_arrow(&batch).unwrap();
 
     assert_eq!(result.len(), 3);
@@ -493,7 +501,7 @@ fn arrow_output_empty_batch() {
         vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
     ).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let result = transcoder.transcode_arrow(&batch).unwrap();
     assert_eq!(result.len(), 0);
 }
@@ -519,7 +527,7 @@ fn coercion_int64_to_int32_valid() {
         }],
     ).unwrap();
 
-    let mut transcoder = Transcoder::new(&mapping).unwrap();
+    let transcoder = Transcoder::new(&mapping).unwrap();
 
     let batch = RecordBatch::try_new(
         Arc::new(arrow_schema),
@@ -527,7 +535,7 @@ fn coercion_int64_to_int32_valid() {
     ).unwrap();
 
     let mut output = Vec::new();
-    transcoder.transcode_delimited(&mut batch.clone(), &mut output).unwrap();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
     let messages = split_delimited(&output);
     let msg0 = decode_message(&messages[0], &schema, "fixtures.Scalars");
@@ -552,7 +560,7 @@ fn coercion_int64_to_int32_overflow() {
         }],
     ).unwrap();
 
-    let mut transcoder = Transcoder::new(&mapping).unwrap();
+    let transcoder = Transcoder::new(&mapping).unwrap();
 
     let batch = RecordBatch::try_new(
         Arc::new(arrow_schema),
@@ -560,11 +568,389 @@ fn coercion_int64_to_int32_overflow() {
     ).unwrap();
 
     let mut output = Vec::new();
-    let result = transcoder.transcode_delimited(&mut batch.clone(), &mut output);
+    let result = transcoder.transcode_delimited(&batch, &mut output);
     assert!(result.is_err());
 
     let err = result.unwrap_err();
     let err_str = err.to_string();
     assert!(err_str.contains("row 0"), "error should mention row: {err_str}");
     assert!(err_str.contains("int32_field"), "error should mention field: {err_str}");
+}
+
+// ==================== Nested message ====================
+
+#[test]
+fn roundtrip_nested_message() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("inner", DataType::Struct(Fields::from(vec![
+            Field::new("value", DataType::Utf8, false),
+            Field::new("count", DataType::Int32, false),
+        ])), true),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("value", DataType::Utf8, false)),
+         Arc::new(StringArray::from(vec!["hello", "world"])) as Arc<dyn Array>),
+        (Arc::new(Field::new("count", DataType::Int32, false)),
+         Arc::new(Int32Array::from(vec![1, 2])) as Arc<dyn Array>),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(struct_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 2);
+
+    let msg0 = decode_message(&messages[0], &schema, "fixtures.Nested");
+    let inner0 = msg0.get_field_by_name("inner").unwrap();
+    let inner0_msg = inner0.as_message().unwrap();
+    assert_eq!(inner0_msg.get_field_by_name("value").unwrap().as_str().unwrap(), "hello");
+    assert_eq!(inner0_msg.get_field_by_name("count").unwrap().as_i32().unwrap(), 1);
+}
+
+// ==================== Repeated scalar (packed) ====================
+
+#[test]
+fn roundtrip_repeated_int32() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("tags", DataType::List(
+            Arc::new(Field::new("item", DataType::Int32, true))
+        ), true),
+    ]);
+
+    let mut builder = ListBuilder::new(Int32Builder::new());
+    builder.values().append_value(1);
+    builder.values().append_value(2);
+    builder.values().append_value(3);
+    builder.append(true);
+    builder.values().append_value(10);
+    builder.append(true);
+    let list_array = builder.finish();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(list_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 2);
+
+    let msg0 = decode_message(&messages[0], &schema, "fixtures.Nested");
+    let tags: Vec<i32> = msg0.get_field_by_name("tags").unwrap()
+        .as_list().unwrap()
+        .iter()
+        .map(|v| v.as_i32().unwrap())
+        .collect();
+    assert_eq!(tags, vec![1, 2, 3]);
+
+    let msg1 = decode_message(&messages[1], &schema, "fixtures.Nested");
+    let tags: Vec<i32> = msg1.get_field_by_name("tags").unwrap()
+        .as_list().unwrap()
+        .iter()
+        .map(|v| v.as_i32().unwrap())
+        .collect();
+    assert_eq!(tags, vec![10]);
+}
+
+// ==================== Repeated message ====================
+
+#[test]
+fn roundtrip_repeated_message() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("items", DataType::List(
+            Arc::new(Field::new("item", DataType::Struct(Fields::from(vec![
+                Field::new("value", DataType::Utf8, false),
+                Field::new("count", DataType::Int32, false),
+            ])), true))
+        ), true),
+    ]);
+
+    let inner_fields = Fields::from(vec![
+        Field::new("value", DataType::Utf8, false),
+        Field::new("count", DataType::Int32, false),
+    ]);
+    let struct_builder = StructBuilder::from_fields(inner_fields, 4);
+    let mut list_builder = ListBuilder::new(struct_builder);
+
+    // Row 0: two items.
+    list_builder.values().field_builder::<StringBuilder>(0).unwrap().append_value("a");
+    list_builder.values().field_builder::<Int32Builder>(1).unwrap().append_value(1);
+    list_builder.values().append(true);
+    list_builder.values().field_builder::<StringBuilder>(0).unwrap().append_value("b");
+    list_builder.values().field_builder::<Int32Builder>(1).unwrap().append_value(2);
+    list_builder.values().append(true);
+    list_builder.append(true);
+
+    let list_array = list_builder.finish();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(list_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 1);
+
+    let msg0 = decode_message(&messages[0], &schema, "fixtures.Nested");
+    let items = msg0.get_field_by_name("items").unwrap();
+    let items_list = items.as_list().unwrap();
+    assert_eq!(items_list.len(), 2);
+    assert_eq!(items_list[0].as_message().unwrap().get_field_by_name("value").unwrap().as_str().unwrap(), "a");
+    assert_eq!(items_list[1].as_message().unwrap().get_field_by_name("count").unwrap().as_i32().unwrap(), 2);
+}
+
+// ==================== Map ====================
+
+#[test]
+fn roundtrip_map() {
+    let schema = nested_schema();
+
+    let key_builder = StringBuilder::new();
+    let value_builder = Int64Builder::new();
+    let mut map_builder = MapBuilder::new(None, key_builder, value_builder);
+
+    map_builder.keys().append_value("a");
+    map_builder.values().append_value(1);
+    map_builder.keys().append_value("b");
+    map_builder.values().append_value(2);
+    map_builder.append(true).unwrap();
+
+    let map_array = map_builder.finish();
+
+    // Derive the schema from the actual array to avoid field name mismatches.
+    let arrow_schema = Schema::new(vec![
+        Field::new("metadata", map_array.data_type().clone(), true),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(map_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 1);
+
+    let msg0 = decode_message(&messages[0], &schema, "fixtures.Nested");
+    let metadata = msg0.get_field_by_name("metadata").unwrap();
+    let map = metadata.as_map().unwrap();
+    assert_eq!(map.len(), 2);
+}
+
+// ==================== Oneof ====================
+
+#[test]
+fn roundtrip_oneof_one_set() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("choice", DataType::Struct(Fields::from(vec![
+            Field::new("text_value", DataType::Utf8, true),
+            Field::new("int_value", DataType::Int32, true),
+        ])), true),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("text_value", DataType::Utf8, true)),
+         Arc::new(StringArray::from(vec![Some("hello"), None])) as Arc<dyn Array>),
+        (Arc::new(Field::new("int_value", DataType::Int32, true)),
+         Arc::new(Int32Array::from(vec![None, Some(42)])) as Arc<dyn Array>),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(struct_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 2);
+
+    // Row 0: text_value set.
+    let msg0 = decode_message(&messages[0], &schema, "fixtures.Nested");
+    assert_eq!(msg0.get_field_by_name("text_value").unwrap().as_str().unwrap(), "hello");
+
+    // Row 1: int_value set.
+    let msg1 = decode_message(&messages[1], &schema, "fixtures.Nested");
+    assert_eq!(msg1.get_field_by_name("int_value").unwrap().as_i32().unwrap(), 42);
+}
+
+#[test]
+fn roundtrip_oneof_none_set() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("choice", DataType::Struct(Fields::from(vec![
+            Field::new("text_value", DataType::Utf8, true),
+            Field::new("int_value", DataType::Int32, true),
+        ])), true),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("text_value", DataType::Utf8, true)),
+         Arc::new(StringArray::from(vec![None::<&str>])) as Arc<dyn Array>),
+        (Arc::new(Field::new("int_value", DataType::Int32, true)),
+         Arc::new(Int32Array::from(vec![None::<i32>])) as Arc<dyn Array>),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(struct_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 1);
+    // Empty message — no oneof variant set.
+    assert!(messages[0].is_empty());
+}
+
+#[test]
+fn oneof_multiple_set_error() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("choice", DataType::Struct(Fields::from(vec![
+            Field::new("text_value", DataType::Utf8, true),
+            Field::new("int_value", DataType::Int32, true),
+        ])), true),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("text_value", DataType::Utf8, true)),
+         Arc::new(StringArray::from(vec![Some("hello")])) as Arc<dyn Array>),
+        (Arc::new(Field::new("int_value", DataType::Int32, true)),
+         Arc::new(Int32Array::from(vec![Some(42)])) as Arc<dyn Array>),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(struct_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    let result = transcoder.transcode_delimited(&batch, &mut output);
+    assert!(result.is_err());
+
+    let err = result.unwrap_err();
+    assert!(matches!(err, TranscodeError::OneofMultipleSet { .. }));
+    let err_str = err.to_string();
+    assert!(err_str.contains("row 0"));
+    assert!(err_str.contains("choice"));
+}
+
+// ==================== Mixed batch ====================
+
+#[test]
+fn roundtrip_mixed_batch() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("inner", DataType::Struct(Fields::from(vec![
+            Field::new("value", DataType::Utf8, false),
+            Field::new("count", DataType::Int32, false),
+        ])), true),
+        Field::new("tags", DataType::List(
+            Arc::new(Field::new("item", DataType::Int32, true))
+        ), true),
+        Field::new("status", DataType::Int32, false),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("value", DataType::Utf8, false)),
+         Arc::new(StringArray::from(vec!["test"])) as Arc<dyn Array>),
+        (Arc::new(Field::new("count", DataType::Int32, false)),
+         Arc::new(Int32Array::from(vec![99])) as Arc<dyn Array>),
+    ]);
+
+    let mut list_builder = ListBuilder::new(Int32Builder::new());
+    list_builder.values().append_value(10);
+    list_builder.values().append_value(20);
+    list_builder.append(true);
+    let list_array = list_builder.finish();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(struct_array),
+            Arc::new(list_array),
+            Arc::new(Int32Array::from(vec![1])), // STATUS_ACTIVE
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 1);
+
+    let msg = decode_message(&messages[0], &schema, "fixtures.Nested");
+    let inner = msg.get_field_by_name("inner").unwrap().as_message().unwrap().clone();
+    assert_eq!(inner.get_field_by_name("value").unwrap().as_str().unwrap(), "test");
+    assert_eq!(inner.get_field_by_name("count").unwrap().as_i32().unwrap(), 99);
+
+    let tags: Vec<i32> = msg.get_field_by_name("tags").unwrap()
+        .as_list().unwrap()
+        .iter()
+        .map(|v| v.as_i32().unwrap())
+        .collect();
+    assert_eq!(tags, vec![10, 20]);
+}
+
+// ==================== Arrow output with nested ====================
+
+#[test]
+fn arrow_output_nested() {
+    let schema = nested_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("inner", DataType::Struct(Fields::from(vec![
+            Field::new("value", DataType::Utf8, false),
+            Field::new("count", DataType::Int32, false),
+        ])), true),
+    ]);
+
+    let struct_array = StructArray::from(vec![
+        (Arc::new(Field::new("value", DataType::Utf8, false)),
+         Arc::new(StringArray::from(vec!["x", "y"])) as Arc<dyn Array>),
+        (Arc::new(Field::new("count", DataType::Int32, false)),
+         Arc::new(Int32Array::from(vec![5, 10])) as Arc<dyn Array>),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![Arc::new(struct_array)],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let result = transcoder.transcode_arrow(&batch).unwrap();
+
+    assert_eq!(result.len(), 2);
+
+    let msg0 = decode_message(result.value(0), &schema, "fixtures.Nested");
+    let inner0 = msg0.get_field_by_name("inner").unwrap().as_message().unwrap().clone();
+    assert_eq!(inner0.get_field_by_name("value").unwrap().as_str().unwrap(), "x");
 }

@@ -6,3 +6,16 @@ edition = "2021"
 [[bin]]
 name = "apb"
 path = "src/main.rs"
+
+[features]
+duckdb = ["dep:duckdb"]
+duckdb-bundled = ["duckdb", "dep:duckdb", "duckdb/bundled"]
+
+[dependencies]
+apb-core = { path = "../apb-core" }
+arrow-ipc = "58"
+arrow-schema = "58"
+clap = { version = "4", features = ["derive"] }
+duckdb = { version = "1", optional = true }
+prost-reflect = { version = "0.14", features = ["serde"] }
+serde_json = "1"

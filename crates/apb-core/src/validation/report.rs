@@ -19,12 +19,15 @@ pub enum ReportStatus {
 pub struct MappingReport {
     /// Proto message fully qualified name.
     pub message_name: String,
+    /// Optional source name (table, query, file) for display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
     /// Successfully mapped fields.
     pub mapped: Vec<MappedField>,
     /// Arrow fields with no proto counterpart.
-    pub unmapped_arrow: Vec<UnmappedField>,
+    pub unmapped_arrow: Vec<UnmappedArrowField>,
     /// Proto fields with no Arrow counterpart.
-    pub unmapped_proto: Vec<UnmappedField>,
+    pub unmapped_proto: Vec<UnmappedProtoField>,
     /// Type errors (incompatible or unapproved coercion).
     pub type_errors: Vec<FieldTypeError>,
     /// Structural errors (e.g. oneof target not a struct).
@@ -39,9 +42,11 @@ pub struct MappingReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappedField {
     pub arrow_name: String,
+    pub arrow_type: String,
     pub arrow_index: usize,
     pub proto_name: String,
     pub proto_number: u32,
+    pub proto_type: String,
     pub bind_method: String,
     pub type_mode: String,
     pub field_shape: FieldShapeSummary,
@@ -57,11 +62,21 @@ pub enum FieldShapeSummary {
     Oneof,
 }
 
-/// An unmapped field (Arrow or proto side).
+/// An unmapped Arrow field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnmappedField {
+pub struct UnmappedArrowField {
     pub name: String,
-    pub detail: String,
+    pub arrow_type: String,
+    pub index: usize,
+}
+
+/// An unmapped proto field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnmappedProtoField {
+    pub name: String,
+    pub proto_type: String,
+    pub number: u32,
+    pub oneof_name: Option<String>,
 }
 
 /// A type error for a specific field.
@@ -70,6 +85,7 @@ pub struct FieldTypeError {
     pub arrow_name: String,
     pub arrow_type: String,
     pub proto_name: String,
+    pub proto_number: u32,
     pub proto_type: String,
     pub reason: String,
 }
@@ -105,9 +121,11 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
 
         mapped.push(MappedField {
             arrow_name: binding.arrow_name.clone(),
+            arrow_type: format_arrow_type(&binding.type_check.arrow_type),
             arrow_index: binding.arrow_index,
             proto_name: binding.proto_name.clone(),
             proto_number: binding.proto_number,
+            proto_type: format_proto_kind(&binding.type_check.proto_kind, &shape),
             bind_method: format_bind_method(&binding.bind_method),
             type_mode: format_type_mode(&binding.type_check.mode),
             field_shape: shape,
@@ -118,15 +136,16 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
         }
     }
 
-    // Add oneof variants as mapped fields.
     for oneof in &mapping.oneofs {
         for variant in &oneof.variants {
             let (shape, _) = summarize_shape(&variant.field_shape, &variant.proto_name);
             mapped.push(MappedField {
                 arrow_name: format!("{}.{}", oneof.arrow_name, variant.proto_name),
+                arrow_type: format_arrow_type(&variant.type_check.arrow_type),
                 arrow_index: oneof.arrow_index,
                 proto_name: variant.proto_name.clone(),
                 proto_number: variant.proto_number,
+                proto_type: format_proto_kind(&variant.type_check.proto_kind, &shape),
                 bind_method: "oneof".to_string(),
                 type_mode: format_type_mode(&variant.type_check.mode),
                 field_shape: shape,
@@ -137,18 +156,21 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
     let unmapped_arrow: Vec<_> = mapping
         .unmapped_arrow
         .iter()
-        .map(|f| UnmappedField {
+        .map(|f| UnmappedArrowField {
             name: f.name.clone(),
-            detail: format!("index {}", f.index),
+            arrow_type: String::new(), // not available from mapping alone
+            index: f.index,
         })
         .collect();
 
     let unmapped_proto: Vec<_> = mapping
         .unmapped_proto
         .iter()
-        .map(|f| UnmappedField {
+        .map(|f| UnmappedProtoField {
             name: f.name.clone(),
-            detail: format!("#{}", f.number),
+            proto_type: String::new(), // not available from mapping alone
+            number: f.number,
+            oneof_name: None,
         })
         .collect();
 
@@ -159,6 +181,7 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
 
     MappingReport {
         message_name: mapping.message_name.clone(),
+        source_name: None,
         mapped,
         unmapped_arrow,
         unmapped_proto,
@@ -172,6 +195,57 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
         } else {
             ReportStatus::Ok
         },
+    }
+}
+
+pub(crate) fn format_arrow_type(dt: &arrow_schema::DataType) -> String {
+    use arrow_schema::DataType::*;
+    match dt {
+        Boolean => "Boolean".into(),
+        Int32 => "Int32".into(),
+        Int64 => "Int64".into(),
+        UInt32 => "UInt32".into(),
+        UInt64 => "UInt64".into(),
+        Float32 => "Float32".into(),
+        Float64 => "Float64".into(),
+        Utf8 | LargeUtf8 => "Utf8".into(),
+        Binary | LargeBinary => "Binary".into(),
+        Timestamp(u, _) => format!("Timestamp({u:?})"),
+        Date32 => "Date32".into(),
+        Date64 => "Date64".into(),
+        Duration(u) => format!("Duration({u:?})"),
+        Struct(_) => "Struct".into(),
+        List(f) => format!("List<{}>", format_arrow_type(f.data_type())),
+        LargeList(f) => format!("List<{}>", format_arrow_type(f.data_type())),
+        Map(_, _) => "Map".into(),
+        other => format!("{other}"),
+    }
+}
+
+pub(crate) fn format_proto_kind(kind: &prost_reflect::Kind, shape: &FieldShapeSummary) -> String {
+    use prost_reflect::Kind::*;
+    let base = match kind {
+        Bool => "bool".to_string(),
+        Int32 => "int32".to_string(),
+        Int64 => "int64".to_string(),
+        Uint32 => "uint32".to_string(),
+        Uint64 => "uint64".to_string(),
+        Sint32 => "sint32".to_string(),
+        Sint64 => "sint64".to_string(),
+        Fixed32 => "fixed32".to_string(),
+        Fixed64 => "fixed64".to_string(),
+        Sfixed32 => "sfixed32".to_string(),
+        Sfixed64 => "sfixed64".to_string(),
+        Float => "float".to_string(),
+        Double => "double".to_string(),
+        String => "string".to_string(),
+        Bytes => "bytes".to_string(),
+        Message(desc) => desc.name().to_string(),
+        Enum(desc) => format!("enum {}", desc.name()),
+    };
+    match shape {
+        FieldShapeSummary::Repeated => format!("repeated {base}"),
+        _ => base,
     }
 }
 

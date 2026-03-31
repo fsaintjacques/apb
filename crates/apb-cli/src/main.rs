@@ -148,6 +148,7 @@ fn run_validate(
     let proto_schema = load_schema(&descriptor)?;
     let msg_desc = proto_schema.message(&message)?;
 
+    let source_name = ipc.as_deref().unwrap_or("(query)").to_string();
     let input = open_input(query, ipc)?;
 
     if !quiet {
@@ -159,7 +160,8 @@ fn run_validate(
         allow_unmapped_arrow: !strict,
     };
 
-    let report = validation::validate(&input.schema, &msg_desc, &options);
+    let mut report = validation::validate(&input.schema, &msg_desc, &options);
+    report.source_name = Some(source_name);
 
     match format.as_str() {
         "json" => println!("{}", report.to_json()),

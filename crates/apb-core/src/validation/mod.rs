@@ -12,18 +12,14 @@ use prost_reflect::{Cardinality, FieldDescriptor, Kind, MessageDescriptor};
 
 use crate::mapping::{infer_mapping, InferOptions};
 use crate::types::{check_compatibility, TypeCompatibility};
+use report::{format_arrow_type, format_proto_kind};
 
 /// Validate an Arrow schema against a proto message and produce a report.
-///
-/// This never panics or returns `Err` — all problems are captured in the
-/// report. It walks the full schema and collects all diagnostics instead of
-/// short-circuiting on the first error.
 pub fn validate(
     arrow_schema: &Schema,
     message: &MessageDescriptor,
     options: &InferOptions,
 ) -> MappingReport {
-    // Try the normal mapping path first.
     let permissive = InferOptions {
         allow_unmapped_proto: true,
         allow_unmapped_arrow: true,
@@ -33,19 +29,32 @@ pub fn validate(
         Ok(mapping) => {
             let mut report = report_from_mapping(&mapping);
 
-            // If the caller's options are stricter, check them and adjust status.
+            // Enrich unmapped proto fields with type info from the descriptor.
+            for uf in &mut report.unmapped_proto {
+                if let Some(field) = message.get_field_by_name(&uf.name) {
+                    uf.proto_type = proto_kind_str(&field);
+                    if let Some(oneof) = field.containing_oneof() {
+                        if oneof.fields().len() > 1 {
+                            uf.oneof_name = Some(oneof.name().to_string());
+                        }
+                    }
+                }
+            }
+
+            // Enrich unmapped Arrow fields with type info from the schema.
+            for uf in &mut report.unmapped_arrow {
+                if let Ok(field) = arrow_schema.field_with_name(&uf.name) {
+                    uf.arrow_type = format_arrow_type(field.data_type());
+                }
+            }
+
             if !options.allow_unmapped_proto && !report.unmapped_proto.is_empty() {
                 report.status = ReportStatus::Error;
                 report.structural_errors.push(StructuralError {
                     path: report.message_name.clone(),
                     message: format!(
                         "unmapped proto fields not allowed: {}",
-                        report
-                            .unmapped_proto
-                            .iter()
-                            .map(|f| f.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        report.unmapped_proto.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
                     ),
                 });
             }
@@ -55,28 +64,17 @@ pub fn validate(
                     path: report.message_name.clone(),
                     message: format!(
                         "unmapped Arrow fields not allowed: {}",
-                        report
-                            .unmapped_arrow
-                            .iter()
-                            .map(|f| f.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        report.unmapped_arrow.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
                     ),
                 });
             }
 
             report
         }
-        Err(_err) => {
-            // Mapping failed — build a report by walking the schema and
-            // collecting all diagnostics.
-            collect_all_diagnostics(arrow_schema.fields(), message)
-        }
+        Err(_err) => collect_all_diagnostics(arrow_schema.fields(), message),
     }
 }
 
-/// Walk the schema exhaustively, collecting all errors instead of
-/// short-circuiting. Used when `infer_mapping` fails on the first error.
 fn collect_all_diagnostics(
     arrow_fields: &Fields,
     message: &MessageDescriptor,
@@ -90,18 +88,12 @@ fn collect_all_diagnostics(
     let mut processed_oneofs = HashSet::new();
 
     for proto_field in message.fields() {
-        // Handle real oneofs.
         if let Some(oneof) = proto_field.containing_oneof() {
             if oneof.fields().len() > 1 {
                 if processed_oneofs.insert(oneof.name().to_string()) {
                     validate_oneof(
-                        arrow_fields,
-                        &oneof,
-                        &mut bound_arrow_indices,
-                        &mut mapped,
-                        &mut type_errors,
-                        &mut structural_errors,
-                        &mut unmapped_proto,
+                        arrow_fields, &oneof, &mut bound_arrow_indices,
+                        &mut mapped, &mut type_errors, &mut structural_errors, &mut unmapped_proto,
                     );
                 }
                 continue;
@@ -109,14 +101,8 @@ fn collect_all_diagnostics(
         }
 
         validate_field(
-            arrow_fields,
-            &proto_field,
-            &mut bound_arrow_indices,
-            &mut mapped,
-            &mut type_errors,
-            &mut structural_errors,
-            &mut nested_reports,
-            &mut unmapped_proto,
+            arrow_fields, &proto_field, &mut bound_arrow_indices,
+            &mut mapped, &mut type_errors, &mut structural_errors, &mut nested_reports, &mut unmapped_proto,
         );
     }
 
@@ -124,20 +110,20 @@ fn collect_all_diagnostics(
         .iter()
         .enumerate()
         .filter(|(i, _)| !bound_arrow_indices.contains(i))
-        .map(|(_, f)| UnmappedField {
+        .map(|(i, f)| UnmappedArrowField {
             name: f.name().to_string(),
-            detail: format!("{}", f.data_type()),
+            arrow_type: format_arrow_type(f.data_type()),
+            index: i,
         })
         .collect();
 
-    let nested_has_errors = nested_reports
-        .iter()
-        .any(|n| n.report.status == ReportStatus::Error);
+    let nested_has_errors = nested_reports.iter().any(|n| n.report.status == ReportStatus::Error);
     let has_errors = !type_errors.is_empty() || !structural_errors.is_empty() || nested_has_errors;
     let has_warnings = !unmapped_arrow.is_empty() || !unmapped_proto.is_empty();
 
     MappingReport {
         message_name: message.full_name().to_string(),
+        source_name: None,
         mapped,
         unmapped_arrow,
         unmapped_proto,
@@ -154,6 +140,11 @@ fn collect_all_diagnostics(
     }
 }
 
+fn proto_kind_str(field: &FieldDescriptor) -> String {
+    let shape = infer_shape_summary(field);
+    format_proto_kind(&field.kind(), &shape)
+}
+
 fn validate_field(
     arrow_fields: &Fields,
     proto_field: &FieldDescriptor,
@@ -162,38 +153,40 @@ fn validate_field(
     type_errors: &mut Vec<FieldTypeError>,
     structural_errors: &mut Vec<StructuralError>,
     nested_reports: &mut Vec<NestedReport>,
-    unmapped_proto: &mut Vec<UnmappedField>,
+    unmapped_proto: &mut Vec<UnmappedProtoField>,
 ) {
-    // Find Arrow field by name.
     let Some((arrow_index, arrow_field)) = arrow_fields
         .iter()
         .enumerate()
         .find(|(_, f)| f.name() == proto_field.name())
     else {
-        unmapped_proto.push(UnmappedField {
+        unmapped_proto.push(UnmappedProtoField {
             name: proto_field.name().to_string(),
-            detail: format!("#{}", proto_field.number()),
+            proto_type: proto_kind_str(proto_field),
+            number: proto_field.number(),
+            oneof_name: None,
         });
         return;
     };
 
     bound_indices.insert(arrow_index);
+    let shape = infer_shape_summary(proto_field);
 
-    // Check type compatibility.
     let compat = check_compatibility(arrow_field.data_type(), &proto_field.kind());
     match compat {
         TypeCompatibility::Compatible => {
             mapped.push(MappedField {
                 arrow_name: arrow_field.name().to_string(),
+                arrow_type: format_arrow_type(arrow_field.data_type()),
                 arrow_index,
                 proto_name: proto_field.name().to_string(),
                 proto_number: proto_field.number(),
+                proto_type: format_proto_kind(&proto_field.kind(), &shape),
                 bind_method: "name-match".to_string(),
                 type_mode: "direct".to_string(),
-                field_shape: infer_shape_summary(proto_field),
+                field_shape: shape,
             });
 
-            // Recurse into nested messages.
             if let Kind::Message(msg_desc) = proto_field.kind() {
                 if let DataType::Struct(sub_fields) = arrow_field.data_type() {
                     if proto_field.cardinality() != Cardinality::Repeated && !proto_field.is_map() {
@@ -209,26 +202,27 @@ fn validate_field(
         TypeCompatibility::CoercionAvailable { risk } => {
             type_errors.push(FieldTypeError {
                 arrow_name: arrow_field.name().to_string(),
-                arrow_type: format!("{}", arrow_field.data_type()),
+                arrow_type: format_arrow_type(arrow_field.data_type()),
                 proto_name: proto_field.name().to_string(),
-                proto_type: format!("{:?}", proto_field.kind()),
-                reason: format!("coercion available ({risk}) but not enabled — add (apb).coerce = true"),
+                proto_number: proto_field.number(),
+                proto_type: proto_kind_str(proto_field),
+                reason: format!("coercion available ({risk}) but not enabled"),
             });
         }
         TypeCompatibility::Incompatible { reason } => {
-            // For nested messages, check if Arrow field is a Struct.
             if matches!(proto_field.kind(), Kind::Message(_))
                 && proto_field.cardinality() != Cardinality::Repeated
                 && !proto_field.is_map()
             {
                 if let DataType::Struct(sub_fields) = arrow_field.data_type() {
                     if let Kind::Message(msg_desc) = proto_field.kind() {
-                        // It's a nested message — recurse instead of reporting type error.
                         mapped.push(MappedField {
                             arrow_name: arrow_field.name().to_string(),
+                            arrow_type: format_arrow_type(arrow_field.data_type()),
                             arrow_index,
                             proto_name: proto_field.name().to_string(),
                             proto_number: proto_field.number(),
+                            proto_type: format_proto_kind(&proto_field.kind(), &shape),
                             bind_method: "name-match".to_string(),
                             type_mode: "direct".to_string(),
                             field_shape: FieldShapeSummary::Message,
@@ -241,20 +235,17 @@ fn validate_field(
                         return;
                     }
                 }
-                // Arrow field is not a Struct but proto expects a message.
                 structural_errors.push(StructuralError {
                     path: proto_field.name().to_string(),
-                    message: format!(
-                        "expected Struct for nested message, got {}",
-                        arrow_field.data_type()
-                    ),
+                    message: format!("expected Struct for nested message, got {}", arrow_field.data_type()),
                 });
             } else {
                 type_errors.push(FieldTypeError {
                     arrow_name: arrow_field.name().to_string(),
-                    arrow_type: format!("{}", arrow_field.data_type()),
+                    arrow_type: format_arrow_type(arrow_field.data_type()),
                     proto_name: proto_field.name().to_string(),
-                    proto_type: format!("{:?}", proto_field.kind()),
+                    proto_number: proto_field.number(),
+                    proto_type: proto_kind_str(proto_field),
                     reason,
                 });
             }
@@ -269,18 +260,19 @@ fn validate_oneof(
     mapped: &mut Vec<MappedField>,
     type_errors: &mut Vec<FieldTypeError>,
     structural_errors: &mut Vec<StructuralError>,
-    unmapped_proto: &mut Vec<UnmappedField>,
+    unmapped_proto: &mut Vec<UnmappedProtoField>,
 ) {
     let Some((arrow_index, arrow_field)) = arrow_fields
         .iter()
         .enumerate()
         .find(|(_, f)| f.name() == oneof.name())
     else {
-        // No Arrow field for this oneof — all variants are unmapped.
         for variant in oneof.fields() {
-            unmapped_proto.push(UnmappedField {
+            unmapped_proto.push(UnmappedProtoField {
                 name: variant.name().to_string(),
-                detail: format!("#{} (oneof {})", variant.number(), oneof.name()),
+                proto_type: proto_kind_str(&variant),
+                number: variant.number(),
+                oneof_name: Some(oneof.name().to_string()),
             });
         }
         return;
@@ -293,11 +285,7 @@ fn validate_oneof(
         _ => {
             structural_errors.push(StructuralError {
                 path: oneof.name().to_string(),
-                message: format!(
-                    "oneof '{}': expected Struct, got {}",
-                    oneof.name(),
-                    arrow_field.data_type()
-                ),
+                message: format!("oneof '{}': expected Struct, got {}", oneof.name(), arrow_field.data_type()),
             });
             return;
         }
@@ -309,34 +297,39 @@ fn validate_oneof(
             .enumerate()
             .find(|(_, f)| f.name() == variant.name())
         {
+            let shape = FieldShapeSummary::Oneof;
             let compat = check_compatibility(child_field.data_type(), &variant.kind());
             match compat {
                 TypeCompatibility::Compatible => {
                     mapped.push(MappedField {
                         arrow_name: format!("{}.{}", oneof.name(), variant.name()),
+                        arrow_type: format_arrow_type(child_field.data_type()),
                         arrow_index,
                         proto_name: variant.name().to_string(),
                         proto_number: variant.number(),
+                        proto_type: format_proto_kind(&variant.kind(), &shape),
                         bind_method: "oneof".to_string(),
                         type_mode: "direct".to_string(),
-                        field_shape: FieldShapeSummary::Oneof,
+                        field_shape: shape,
                     });
                 }
                 TypeCompatibility::CoercionAvailable { risk } => {
                     type_errors.push(FieldTypeError {
                         arrow_name: format!("{}.{}", oneof.name(), variant.name()),
-                        arrow_type: format!("{}", child_field.data_type()),
+                        arrow_type: format_arrow_type(child_field.data_type()),
                         proto_name: variant.name().to_string(),
-                        proto_type: format!("{:?}", variant.kind()),
+                        proto_number: variant.number(),
+                        proto_type: proto_kind_str(&variant),
                         reason: format!("coercion available ({risk}) but not enabled"),
                     });
                 }
                 TypeCompatibility::Incompatible { reason } => {
                     type_errors.push(FieldTypeError {
                         arrow_name: format!("{}.{}", oneof.name(), variant.name()),
-                        arrow_type: format!("{}", child_field.data_type()),
+                        arrow_type: format_arrow_type(child_field.data_type()),
                         proto_name: variant.name().to_string(),
-                        proto_type: format!("{:?}", variant.kind()),
+                        proto_number: variant.number(),
+                        proto_type: proto_kind_str(&variant),
                         reason,
                     });
                 }

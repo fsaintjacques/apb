@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package ga4;
+
+message EventParamValue {
+  string string_value = 1;
+  int64 int_value = 2;
+  double float_value = 3;
+  double double_value = 4;
+}
+
+message EventParam {
+  string key = 1;
+  EventParamValue value = 2;
+}
+
+message UserPropertyValue {
+  int64 string_value = 1;
+  int64 int_value = 2;
+  int64 float_value = 3;
+  int64 double_value = 4;
+  int64 set_timestamp_micros = 5;
+}
+
+message UserProperty {
+  int64 key = 1;
+  UserPropertyValue value = 2;
+}
+
+message PrivacyInfo {
+  int64 analytics_storage = 1;
+  int64 ads_storage = 2;
+  string uses_transient_token = 3;
+}
+
+message UserLtv {
+  double revenue = 1;
+  string currency = 2;
+}
+
+message WebInfo {
+  string browser = 1;
+  string browser_version = 2;
+}
+
+message Device {
+  string category = 1;
+  string mobile_brand_name = 2;
+  string mobile_model_name = 3;
+  string mobile_marketing_name = 4;
+  int64 mobile_os_hardware_model = 5;
+  string operating_system = 6;
+  string operating_system_version = 7;
+  int64 vendor_id = 8;
+  int64 advertising_id = 9;
+  string language = 10;
+  string is_limited_ad_tracking = 11;
+  int64 time_zone_offset_seconds = 12;
+  WebInfo web_info = 13;
+}
+
+message Geo {
+  string continent = 1;
+  string sub_continent = 2;
+  string country = 3;
+  string region = 4;
+  string city = 5;
+  string metro = 6;
+}
+
+message AppInfo {
+  string id = 1;
+  string version = 2;
+  string install_store = 3;
+  string firebase_app_id = 4;
+  string install_source = 5;
+}
+
+message TrafficSource {
+  string medium = 1;
+  string name = 2;
+  string source = 3;
+}
+
+message EventDimensions {
+  string hostname = 1;
+}
+
+message Ecommerce {
+  int64 total_item_quantity = 1;
+  double purchase_revenue_in_usd = 2;
+  double purchase_revenue = 3;
+  double refund_value_in_usd = 4;
+  double refund_value = 5;
+  double shipping_value_in_usd = 6;
+  double shipping_value = 7;
+  double tax_value_in_usd = 8;
+  double tax_value = 9;
+  int64 unique_items = 10;
+  string transaction_id = 11;
+}
+
+message Item {
+  string item_id = 1;
+  string item_name = 2;
+  string item_brand = 3;
+  string item_variant = 4;
+  string item_category = 5;
+  string item_category2 = 6;
+  string item_category3 = 7;
+  string item_category4 = 8;
+  string item_category5 = 9;
+  double price_in_usd = 10;
+  double price = 11;
+  int64 quantity = 12;
+  double item_revenue_in_usd = 13;
+  double item_revenue = 14;
+  double item_refund_in_usd = 15;
+  double item_refund = 16;
+  string coupon = 17;
+  string affiliation = 18;
+  string location_id = 19;
+  string item_list_id = 20;
+  string item_list_name = 21;
+  string item_list_index = 22;
+  string promotion_id = 23;
+  string promotion_name = 24;
+  string creative_name = 25;
+  string creative_slot = 26;
+}
+
+message Event {
+  string event_date = 1;
+  int64 event_timestamp = 2;
+  string event_name = 3;
+  repeated EventParam event_params = 4;
+  int64 event_previous_timestamp = 5;
+  double event_value_in_usd = 6;
+  int64 event_bundle_sequence_id = 7;
+  int64 event_server_timestamp_offset = 8;
+  string user_id = 9;
+  string user_pseudo_id = 10;
+  PrivacyInfo privacy_info = 11;
+  repeated UserProperty user_properties = 12;
+  int64 user_first_touch_timestamp = 13;
+  UserLtv user_ltv = 14;
+  Device device = 15;
+  Geo geo = 16;
+  AppInfo app_info = 17;
+  TrafficSource traffic_source = 18;
+  int64 stream_id = 19;
+  string platform = 20;
+  EventDimensions event_dimensions = 21;
+  Ecommerce ecommerce = 22;
+  repeated Item items = 23;
+}

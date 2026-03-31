@@ -229,11 +229,10 @@ fn validate_human_rendering_contains_field_names() {
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
     let rendered = report.render_human();
 
-    assert!(rendered.contains("bool_field"));
-    assert!(rendered.contains("extra"));
-    assert!(rendered.contains("WARNINGS"));
-    assert!(rendered.contains("Mapped fields (1)"));
-    assert!(rendered.contains("Unmapped Arrow fields (1)"));
+    assert!(rendered.contains("bool_field"), "should contain matched field name");
+    assert!(rendered.contains("extra"), "should contain unmapped arrow field");
+    assert!(rendered.contains("no proto field"), "should show unmapped arrow columns");
+    assert!(rendered.contains("1/"), "should show mapped count");
 }
 
 #[test]
@@ -241,6 +240,7 @@ fn validate_human_rendering_shows_errors() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
+    // Bool field gets Int32 — type mismatch triggers a type error line.
     let arrow_schema = Schema::new(vec![
         Field::new("bool_field", DataType::Int32, false),
     ]);
@@ -248,7 +248,11 @@ fn validate_human_rendering_shows_errors() {
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
     let rendered = report.render_human();
 
-    assert!(rendered.contains("ERROR"));
-    assert!(rendered.contains("Type errors (1)"));
-    assert!(rendered.contains("bool_field"));
+    assert!(rendered.contains("bool_field"), "should contain field name");
+    assert!(rendered.contains("missing"), "should show missing proto fields");
+    // Type error for bool_field (Int32 vs bool) should show the reason.
+    assert!(
+        rendered.contains("no mapping") || rendered.contains("incompatible"),
+        "should show type error reason: {rendered}"
+    );
 }

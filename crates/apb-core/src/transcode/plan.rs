@@ -380,6 +380,49 @@ fn select_scalar_encoder(
             (encode::encode_int32_as_enum, wire::WIRE_VARINT)
         }
 
+        // === Well-known types (Arrow scalar → proto message) ===
+        // These are length-delimited because they encode as proto messages.
+        (Timestamp(arrow_schema::TimeUnit::Second, _), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Timestamp" =>
+        {
+            (encode::encode_timestamp_s, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Timestamp(arrow_schema::TimeUnit::Millisecond, _), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Timestamp" =>
+        {
+            (encode::encode_timestamp_ms, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Timestamp(arrow_schema::TimeUnit::Microsecond, _), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Timestamp" =>
+        {
+            (encode::encode_timestamp_us, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Timestamp(arrow_schema::TimeUnit::Nanosecond, _), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Timestamp" =>
+        {
+            (encode::encode_timestamp_ns, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Duration(arrow_schema::TimeUnit::Second), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Duration" =>
+        {
+            (encode::encode_duration_s, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Duration(arrow_schema::TimeUnit::Millisecond), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Duration" =>
+        {
+            (encode::encode_duration_ms, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Duration(arrow_schema::TimeUnit::Microsecond), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Duration" =>
+        {
+            (encode::encode_duration_us, wire::WIRE_LENGTH_DELIMITED)
+        }
+        (Duration(arrow_schema::TimeUnit::Nanosecond), Kind::Message(desc), TypeCheckMode::Direct)
+            if desc.full_name() == "google.protobuf.Duration" =>
+        {
+            (encode::encode_duration_ns, wire::WIRE_LENGTH_DELIMITED)
+        }
+
         // === Coercions ===
         (Int64, Kind::Int32, TypeCheckMode::Coerce { .. }) => {
             (encode::encode_int64_as_int32_varint, wire::WIRE_VARINT)

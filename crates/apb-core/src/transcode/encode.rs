@@ -281,3 +281,127 @@ pub fn encode_int32_as_enum(array: &dyn arrow_array::Array, row: usize, buf: &mu
     wire::encode_varint(arr.value(row) as u32 as u64, buf);
     Ok(())
 }
+
+// === Well-known type encoders ===
+//
+// google.protobuf.Timestamp: seconds (field 1, int64 varint) + nanos (field 2, int32 varint)
+// google.protobuf.Duration: same structure.
+//
+// The encoder writes a length-delimited message body (no outer tag — caller handles that).
+// Field tags: seconds = (1 << 3 | 0) = 0x08, nanos = (2 << 3 | 0) = 0x10.
+
+fn encode_seconds_nanos(seconds: i64, nanos: i32, buf: &mut Vec<u8>) {
+    // Max message size: tag(1) + varint(10) + tag(1) + varint(5) = 17 bytes.
+    // Use a stack buffer to avoid heap allocation.
+    let mut msg = [0u8; 22];
+    let mut len = 0;
+
+    macro_rules! push {
+        ($b:expr) => { msg[len] = $b; len += 1; };
+    }
+
+    if seconds != 0 {
+        // Tag for field 1, varint = 0x08
+        push!(0x08);
+        let mut v = seconds as u64;
+        while v >= 0x80 {
+            push!((v as u8) | 0x80);
+            v >>= 7;
+        }
+        push!(v as u8);
+    }
+    if nanos != 0 {
+        // Tag for field 2, varint = 0x10
+        push!(0x10);
+        let mut v = nanos as u32 as u64;
+        while v >= 0x80 {
+            push!((v as u8) | 0x80);
+            v >>= 7;
+        }
+        push!(v as u8);
+    }
+
+    wire::encode_length_delimited(&msg[..len], buf);
+}
+
+/// Split a value in sub-second units into (seconds, nanos) using Euclidean
+/// division so that nanos is always non-negative (required by
+/// google.protobuf.Timestamp spec).
+#[inline]
+fn timestamp_split(value: i64, units_per_second: i64, nanos_per_unit: i64) -> (i64, i32) {
+    let seconds = value.div_euclid(units_per_second);
+    let nanos = (value.rem_euclid(units_per_second) * nanos_per_unit) as i32;
+    (seconds, nanos)
+}
+
+/// Split a value in sub-second units into (seconds, nanos) using truncation
+/// toward zero so that nanos sign matches seconds sign (required by
+/// google.protobuf.Duration spec).
+#[inline]
+fn duration_split(value: i64, units_per_second: i64, nanos_per_unit: i64) -> (i64, i32) {
+    let seconds = value / units_per_second;
+    let nanos = ((value % units_per_second) * nanos_per_unit) as i32;
+    (seconds, nanos)
+}
+
+/// Arrow Timestamp(Second) → google.protobuf.Timestamp
+pub fn encode_timestamp_s(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+    encode_seconds_nanos(arr.value(row), 0, buf);
+    Ok(())
+}
+
+/// Arrow Timestamp(Millisecond) → google.protobuf.Timestamp
+pub fn encode_timestamp_ms(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
+    let (s, n) = timestamp_split(arr.value(row), 1_000, 1_000_000);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}
+
+/// Arrow Timestamp(Microsecond) → google.protobuf.Timestamp
+pub fn encode_timestamp_us(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+    let (s, n) = timestamp_split(arr.value(row), 1_000_000, 1_000);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}
+
+/// Arrow Timestamp(Nanosecond) → google.protobuf.Timestamp
+pub fn encode_timestamp_ns(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
+    let (s, n) = timestamp_split(arr.value(row), 1_000_000_000, 1);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}
+
+/// Arrow Duration(Second) → google.protobuf.Duration
+pub fn encode_duration_s(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+    encode_seconds_nanos(arr.value(row), 0, buf);
+    Ok(())
+}
+
+/// Arrow Duration(Millisecond) → google.protobuf.Duration
+pub fn encode_duration_ms(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<DurationMillisecondArray>().unwrap();
+    let (s, n) = duration_split(arr.value(row), 1_000, 1_000_000);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}
+
+/// Arrow Duration(Microsecond) → google.protobuf.Duration
+pub fn encode_duration_us(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<DurationMicrosecondArray>().unwrap();
+    let (s, n) = duration_split(arr.value(row), 1_000_000, 1_000);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}
+
+/// Arrow Duration(Nanosecond) → google.protobuf.Duration
+pub fn encode_duration_ns(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<DurationNanosecondArray>().unwrap();
+    let (s, n) = duration_split(arr.value(row), 1_000_000_000, 1);
+    encode_seconds_nanos(s, n, buf);
+    Ok(())
+}

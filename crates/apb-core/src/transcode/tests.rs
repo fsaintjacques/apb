@@ -954,3 +954,276 @@ fn arrow_output_nested() {
     let inner0 = msg0.get_field_by_name("inner").unwrap().as_message().unwrap().clone();
     assert_eq!(inner0.get_field_by_name("value").unwrap().as_str().unwrap(), "x");
 }
+
+// ==================== Well-known types ====================
+
+const WELLKNOWN_BIN: &[u8] = include_bytes!("../../fixtures/wellknown.bin");
+
+fn wellknown_schema() -> ProtoSchema {
+    ProtoSchema::from_bytes(WELLKNOWN_BIN).unwrap()
+}
+
+#[test]
+fn roundtrip_timestamp_microsecond() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // 2024-01-15 10:30:00 UTC = 1705311000 seconds = 1705311000000000 microseconds
+    let ts_us: i64 = 1_705_311_000_000_000;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(vec![ts_us])),
+            Arc::new(StringArray::from(vec!["test"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    assert_eq!(messages.len(), 1);
+
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let created_at = msg.get_field_by_name("created_at").unwrap();
+    let ts_msg = created_at.as_message().unwrap();
+    let seconds = ts_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap();
+    let nanos = ts_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap();
+    assert_eq!(seconds, 1_705_311_000);
+    assert_eq!(nanos, 0);
+}
+
+#[test]
+fn roundtrip_timestamp_nanosecond_with_nanos() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // 1705311000 seconds + 123456789 nanos
+    let ts_ns: i64 = 1_705_311_000_123_456_789;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(TimestampNanosecondArray::from(vec![ts_ns])),
+            Arc::new(StringArray::from(vec!["test"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let ts_msg = msg.get_field_by_name("created_at").unwrap().as_message().unwrap().clone();
+    assert_eq!(ts_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap(), 1_705_311_000);
+    assert_eq!(ts_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap(), 123_456_789);
+}
+
+#[test]
+fn roundtrip_timestamp_millisecond() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // 1705311000 seconds + 500ms
+    let ts_ms: i64 = 1_705_311_000_500;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(TimestampMillisecondArray::from(vec![ts_ms])),
+            Arc::new(StringArray::from(vec!["test"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let ts_msg = msg.get_field_by_name("created_at").unwrap().as_message().unwrap().clone();
+    assert_eq!(ts_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap(), 1_705_311_000);
+    assert_eq!(ts_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap(), 500_000_000);
+}
+
+#[test]
+fn roundtrip_duration_microsecond() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("elapsed", DataType::Duration(TimeUnit::Microsecond), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // 5 seconds + 123456 microseconds = 5.123456 seconds
+    let dur_us: i64 = 5_123_456;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(DurationMicrosecondArray::from(vec![dur_us])),
+            Arc::new(StringArray::from(vec!["test"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let dur_msg = msg.get_field_by_name("elapsed").unwrap().as_message().unwrap().clone();
+    assert_eq!(dur_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap(), 5);
+    assert_eq!(dur_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap(), 123_456_000);
+}
+
+#[test]
+fn roundtrip_timestamp_negative_pre_epoch() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // -1500ms = -2 seconds + 500_000_000 nanos (Euclidean)
+    let ts_ms: i64 = -1500;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(TimestampMillisecondArray::from(vec![ts_ms])),
+            Arc::new(StringArray::from(vec!["pre-epoch"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let ts_msg = msg.get_field_by_name("created_at").unwrap().as_message().unwrap().clone();
+    let seconds = ts_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap();
+    let nanos = ts_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap();
+
+    // nanos must be non-negative per google.protobuf.Timestamp spec
+    assert_eq!(seconds, -2);
+    assert_eq!(nanos, 500_000_000);
+}
+
+#[test]
+fn roundtrip_timestamp_second() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("created_at", DataType::Timestamp(TimeUnit::Second, None), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(TimestampSecondArray::from(vec![1_705_311_000i64])),
+            Arc::new(StringArray::from(vec!["test"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let ts_msg = msg.get_field_by_name("created_at").unwrap().as_message().unwrap().clone();
+    assert_eq!(ts_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap(), 1_705_311_000);
+}
+
+#[test]
+fn roundtrip_duration_negative() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("elapsed", DataType::Duration(TimeUnit::Millisecond), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // -2500ms = -2 seconds, -500_000_000 nanos (truncation toward zero for Duration)
+    let dur_ms: i64 = -2500;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(DurationMillisecondArray::from(vec![dur_ms])),
+            Arc::new(StringArray::from(vec!["neg"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let dur_msg = msg.get_field_by_name("elapsed").unwrap().as_message().unwrap().clone();
+    let seconds = dur_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap();
+    let nanos = dur_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap();
+
+    // Duration: nanos sign matches seconds sign
+    assert_eq!(seconds, -2);
+    assert_eq!(nanos, -500_000_000);
+}
+
+#[test]
+fn roundtrip_duration_nanosecond() {
+    use arrow_schema::TimeUnit;
+
+    let schema = wellknown_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("elapsed", DataType::Duration(TimeUnit::Nanosecond), false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    // 3 seconds + 141592653 nanos
+    let dur_ns: i64 = 3_141_592_653;
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema.clone()),
+        vec![
+            Arc::new(DurationNanosecondArray::from(vec![dur_ns])),
+            Arc::new(StringArray::from(vec!["pi"])),
+        ],
+    ).unwrap();
+
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+
+    let messages = split_delimited(&output);
+    let msg = decode_message(&messages[0], &schema, "fixtures.WithWellKnown");
+    let dur_msg = msg.get_field_by_name("elapsed").unwrap().as_message().unwrap().clone();
+    assert_eq!(dur_msg.get_field_by_name("seconds").unwrap().as_i64().unwrap(), 3);
+    assert_eq!(dur_msg.get_field_by_name("nanos").unwrap().as_i32().unwrap(), 141_592_653);
+}

@@ -25,15 +25,16 @@ impl OpenInput {
 
 /// Owns a DuckDB Connection and Statement, yielding RecordBatches lazily.
 ///
-/// The Statement borrows from Connection, and Arrow borrows from Statement,
-/// so we pin both and use pointer-based self-referencing to keep them alive.
+/// The Statement borrows from Connection, so we use a lifetime transmute to
+/// keep both alive together. Safety relies on struct field drop order: `stmt`
+/// is declared before `_conn`, so it is dropped first.
 #[cfg(feature = "duckdb")]
 struct DuckDbBatches {
     // Safety: drop order matters — stmt must be dropped before conn.
     // Fields are dropped in declaration order, so stmt (which borrows conn) is dropped first.
     stmt: Box<duckdb::Statement<'static>>,
     _conn: Box<Connection>,
-    started: bool,
+    first: Option<RecordBatch>,
 }
 
 #[cfg(feature = "duckdb")]
@@ -49,19 +50,21 @@ impl DuckDbBatches {
         let conn_ref: &Connection = &conn;
         let conn_ref: &'static Connection = unsafe { std::mem::transmute(conn_ref) };
         let mut stmt = Box::new(conn_ref.prepare(query)?);
+        stmt.execute([])?;
 
-        let arrow = stmt.query_arrow([])?;
-        let schema = arrow.get_schema();
-        // Drop the Arrow iterator — we only needed it for the schema.
-        // We'll re-step through results in Iterator::next().
-        drop(arrow);
+        // Fetch the first batch to derive the schema.
+        let first = stmt.step().map(|s| RecordBatch::from(&s));
+        let schema = first
+            .as_ref()
+            .map(|b| b.schema())
+            .ok_or("query returned no results")?;
 
         Ok((
             schema,
             DuckDbBatches {
                 stmt,
                 _conn: conn,
-                started: false,
+                first,
             },
         ))
     }
@@ -72,8 +75,8 @@ impl Iterator for DuckDbBatches {
     type Item = Result<RecordBatch, Box<dyn std::error::Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if !self.started {
-            self.started = true;
+        if let Some(batch) = self.first.take() {
+            return Some(Ok(batch));
         }
         let struct_array = self.stmt.step()?;
         Some(Ok(RecordBatch::from(&struct_array)))

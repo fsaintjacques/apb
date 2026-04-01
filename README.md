@@ -224,3 +224,7 @@ which row, which field, what went wrong, and what was expected.
 - `apb generate` — Arrow schema → proto descriptor/IDL generation
 - C ABI (`apb-cabi` crate) for embedding in non-Rust applications
 - Proto → Arrow reverse transcoding (decode)
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

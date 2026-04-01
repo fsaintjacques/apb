@@ -1,8 +1,11 @@
 mod encode;
+mod enum_behavior;
 mod plan;
 #[cfg(test)]
 mod tests;
 pub mod wire;
+
+pub use enum_behavior::UnknownEnumBehavior;
 
 pub use plan::PlanError;
 
@@ -38,13 +41,35 @@ pub enum TranscodeError {
 /// protobuf messages.
 pub struct Transcoder {
     plan: EncodingPlan,
+    unknown_enum: UnknownEnumBehavior,
 }
 
 impl Transcoder {
     /// Build a transcoder from a validated field mapping.
+    /// Build a transcoder from a validated field mapping.
     pub fn new(mapping: &FieldMapping) -> Result<Self, TranscodeError> {
         let plan = EncodingPlan::from_mapping(mapping)?;
-        Ok(Self { plan })
+        Ok(Self {
+            plan,
+            unknown_enum: UnknownEnumBehavior::default(),
+        })
+    }
+
+    /// Set the behavior for unknown enum string values.
+    pub fn with_unknown_enum(mut self, behavior: UnknownEnumBehavior) -> Self {
+        self.unknown_enum = behavior;
+        // Update all enum lookup encoders in the plan.
+        for entry in &mut self.plan.encoders {
+            match entry {
+                plan::EncoderEntry::Field(f) => set_enum_behavior(&mut f.kind, behavior),
+                plan::EncoderEntry::Oneof(o) => {
+                    for v in &mut o.variants {
+                        set_enum_behavior(&mut v.kind, behavior);
+                    }
+                }
+            }
+        }
+        self
     }
 
     /// Transcode a batch into varint-delimited protobuf messages.
@@ -147,8 +172,12 @@ fn encode_field(
             })?;
         }
         FieldEncoderKind::EnumLookup(lookup) => {
+            let before = buf.len();
             buf.extend_from_slice(&encoder.tag);
-            encode_enum_lookup(buf, row, array, lookup, &encoder.arrow_name, &encoder.proto_name)?;
+            let wrote = encode_enum_lookup(buf, row, array, lookup, &encoder.arrow_name, &encoder.proto_name)?;
+            if !wrote {
+                buf.truncate(before); // undo tag for Skip
+            }
         }
         FieldEncoderKind::Message(msg_enc) => {
             buf.extend_from_slice(&encoder.tag);
@@ -165,6 +194,7 @@ fn encode_field(
 }
 
 /// Encode a string value as a proto enum via name lookup.
+/// Returns `Ok(true)` if a value was written, `Ok(false)` if skipped.
 fn encode_enum_lookup(
     buf: &mut Vec<u8>,
     row: usize,
@@ -172,7 +202,7 @@ fn encode_enum_lookup(
     lookup: &EnumLookupEncoder,
     arrow_name: &str,
     proto_name: &str,
-) -> Result<(), TranscodeError> {
+) -> Result<bool, TranscodeError> {
     let value = if let Some(arr) = array.as_any().downcast_ref::<StringArray>() {
         arr.value(row)
     } else if let Some(arr) = array.as_any().downcast_ref::<LargeStringArray>() {
@@ -186,21 +216,40 @@ fn encode_enum_lookup(
         });
     };
 
-    let number = lookup.name_to_number.get(value).ok_or_else(|| {
-        let valid: Vec<_> = lookup.name_to_number.keys().collect();
-        TranscodeError::FieldError {
-            row,
-            arrow_field: arrow_name.to_string(),
-            proto_field: proto_name.to_string(),
-            reason: format!(
-                "unknown enum variant '{}' for {}. Valid: {:?}",
-                value, lookup.enum_name, valid,
-            ),
+    match lookup.name_to_number.get(value) {
+        Some(number) => {
+            wire::encode_varint(*number as u32 as u64, buf);
+            Ok(true)
         }
-    })?;
+        None => match lookup.unknown_behavior {
+            UnknownEnumBehavior::Error => {
+                let mut valid: Vec<_> = lookup.name_to_number.keys().cloned().collect();
+                valid.sort();
+                Err(TranscodeError::FieldError {
+                    row,
+                    arrow_field: arrow_name.to_string(),
+                    proto_field: proto_name.to_string(),
+                    reason: format!(
+                        "unknown enum variant '{}' for {}. Valid: {:?}",
+                        value, lookup.enum_name, valid,
+                    ),
+                })
+            }
+            UnknownEnumBehavior::Default => {
+                wire::encode_varint(0, buf);
+                Ok(true)
+            }
+            UnknownEnumBehavior::Skip => Ok(false),
+        },
+    }
+}
 
-    wire::encode_varint(*number as u32 as u64, buf);
-    Ok(())
+fn set_enum_behavior(kind: &mut FieldEncoderKind, behavior: UnknownEnumBehavior) {
+    match kind {
+        FieldEncoderKind::EnumLookup(e) => e.unknown_behavior = behavior,
+        FieldEncoderKind::Repeated(r) => set_enum_behavior(&mut r.element_kind, behavior),
+        _ => {}
+    }
 }
 
 /// Encode a nested message body as a length-delimited value (no tag).
@@ -410,7 +459,12 @@ fn encode_oneof(
                     })?;
                 }
                 FieldEncoderKind::EnumLookup(lookup) => {
-                    encode_enum_lookup(buf, row, child.as_ref(), lookup, &variant.proto_name, &variant.proto_name)?;
+                    let wrote = encode_enum_lookup(buf, row, child.as_ref(), lookup, &variant.proto_name, &variant.proto_name)?;
+                    if !wrote {
+                        // Undo the tag written before the match.
+                        let tag_len = variant.tag.len();
+                        buf.truncate(buf.len() - tag_len);
+                    }
                 }
                 FieldEncoderKind::Message(msg_enc) => {
                     encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;

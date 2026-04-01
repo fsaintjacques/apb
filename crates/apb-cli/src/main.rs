@@ -84,10 +84,32 @@ enum Command {
         #[arg(long)]
         coerce: bool,
 
+        /// Behavior for unknown enum string values: error, default, skip.
+        #[arg(long, value_enum, default_value = "error")]
+        unknown_enum: CliUnknownEnum,
+
         /// Suppress progress messages.
         #[arg(long)]
         quiet: bool,
     },
+}
+
+/// CLI wrapper for UnknownEnumBehavior (with clap derive).
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum CliUnknownEnum {
+    Error,
+    Default,
+    Skip,
+}
+
+impl From<CliUnknownEnum> for apb_core::transcode::UnknownEnumBehavior {
+    fn from(v: CliUnknownEnum) -> Self {
+        match v {
+            CliUnknownEnum::Error => Self::Error,
+            CliUnknownEnum::Default => Self::Default,
+            CliUnknownEnum::Skip => Self::Skip,
+        }
+    }
 }
 
 fn main() {
@@ -111,8 +133,9 @@ fn main() {
             out_format,
             out,
             coerce,
+            unknown_enum,
             quiet,
-        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, quiet),
+        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, unknown_enum.into(), quiet),
     };
 
     if let Err(e) = result {
@@ -195,6 +218,7 @@ fn run_transcode(
     out_format: OutputFormat,
     out: Option<String>,
     coerce: bool,
+    unknown_enum: apb_core::transcode::UnknownEnumBehavior,
     quiet: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
@@ -221,7 +245,7 @@ fn run_transcode(
         );
     }
 
-    let transcoder = Transcoder::new(&mapping)?;
+    let transcoder = Transcoder::new(&mapping)?.with_unknown_enum(unknown_enum);
 
     let writer: Box<dyn io::Write> = match &out {
         Some(path) => Box::new(fs::File::create(path)?),

@@ -69,6 +69,8 @@ pub struct EnumLookupEncoder {
     pub name_to_number: std::collections::HashMap<String, i32>,
     /// Enum name (for error messages).
     pub enum_name: String,
+    /// Behavior for unknown values.
+    pub unknown_behavior: super::UnknownEnumBehavior,
 }
 
 /// Encodes a StructArray as a nested proto message.
@@ -199,6 +201,7 @@ fn build_encoder_kind(
                         FieldEncoderKind::EnumLookup(EnumLookupEncoder {
                             name_to_number,
                             enum_name: enum_desc.name().to_string(),
+                            unknown_behavior: super::UnknownEnumBehavior::default(),
                         }),
                         tag,
                     ));

@@ -5,8 +5,8 @@ use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema};
 use prost_reflect::{DynamicMessage, MessageDescriptor};
 
-use apb_core::{Array, RecordBatch};
 use apb_core::transcode::Transcoder;
+use apb_core::{Array, RecordBatch};
 
 /// Output format for transcoded data.
 #[derive(Debug, Clone, clap::ValueEnum)]

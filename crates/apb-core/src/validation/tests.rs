@@ -1,8 +1,8 @@
 use arrow_schema::{DataType, Field, Fields, Schema};
 
+use super::*;
 use crate::descriptor::ProtoSchema;
 use crate::mapping::InferOptions;
-use super::*;
 
 const SCALARS_BIN: &[u8] = include_bytes!("../../fixtures/scalars.bin");
 const NESTED_BIN: &[u8] = include_bytes!("../../fixtures/nested.bin");
@@ -84,8 +84,14 @@ fn validate_type_error() {
     assert_eq!(report.status, ReportStatus::Error);
     // Both type errors should be collected, not just the first.
     assert_eq!(report.type_errors.len(), 2);
-    assert!(report.type_errors.iter().any(|e| e.arrow_name == "bool_field"));
-    assert!(report.type_errors.iter().any(|e| e.arrow_name == "string_field"));
+    assert!(report
+        .type_errors
+        .iter()
+        .any(|e| e.arrow_name == "bool_field"));
+    assert!(report
+        .type_errors
+        .iter()
+        .any(|e| e.arrow_name == "string_field"));
 }
 
 #[test]
@@ -111,9 +117,7 @@ fn validate_oneof_not_struct() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("choice", DataType::Utf8, true),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("choice", DataType::Utf8, true)]);
 
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
 
@@ -128,16 +132,14 @@ fn validate_nested_message_errors() {
     let msg = schema.message("fixtures.Nested").unwrap();
 
     // Provide inner as a struct but with wrong child types.
-    let arrow_schema = Schema::new(vec![
-        Field::new(
-            "inner",
-            DataType::Struct(Fields::from(vec![
-                Field::new("value", DataType::Int32, false), // should be string
-                Field::new("count", DataType::Utf8, false),  // should be int32
-            ])),
-            true,
-        ),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new(
+        "inner",
+        DataType::Struct(Fields::from(vec![
+            Field::new("value", DataType::Int32, false), // should be string
+            Field::new("count", DataType::Utf8, false),  // should be int32
+        ])),
+        true,
+    )]);
 
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
 
@@ -156,11 +158,10 @@ fn validate_strict_unmapped_proto() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("bool_field", DataType::Boolean, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("bool_field", DataType::Boolean, false)]);
 
-    let options = InferOptions { coerce_all: false,
+    let options = InferOptions {
+        coerce_all: false,
         allow_unmapped_proto: false,
         allow_unmapped_arrow: true,
     };
@@ -169,7 +170,9 @@ fn validate_strict_unmapped_proto() {
 
     assert_eq!(report.status, ReportStatus::Error);
     assert!(!report.structural_errors.is_empty());
-    assert!(report.structural_errors[0].message.contains("unmapped proto"));
+    assert!(report.structural_errors[0]
+        .message
+        .contains("unmapped proto"));
 }
 
 #[test]
@@ -182,7 +185,8 @@ fn validate_strict_unmapped_arrow() {
         Field::new("extra", DataType::Utf8, false),
     ]);
 
-    let options = InferOptions { coerce_all: false,
+    let options = InferOptions {
+        coerce_all: false,
         allow_unmapped_proto: true,
         allow_unmapped_arrow: false,
     };
@@ -191,7 +195,9 @@ fn validate_strict_unmapped_arrow() {
 
     assert_eq!(report.status, ReportStatus::Error);
     assert!(!report.structural_errors.is_empty());
-    assert!(report.structural_errors[0].message.contains("unmapped Arrow"));
+    assert!(report.structural_errors[0]
+        .message
+        .contains("unmapped Arrow"));
 }
 
 #[test]
@@ -229,9 +235,18 @@ fn validate_human_rendering_contains_field_names() {
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
     let rendered = report.render_human();
 
-    assert!(rendered.contains("bool_field"), "should contain matched field name");
-    assert!(rendered.contains("extra"), "should contain unmapped arrow field");
-    assert!(rendered.contains("no proto field"), "should show unmapped arrow columns");
+    assert!(
+        rendered.contains("bool_field"),
+        "should contain matched field name"
+    );
+    assert!(
+        rendered.contains("extra"),
+        "should contain unmapped arrow field"
+    );
+    assert!(
+        rendered.contains("no proto field"),
+        "should show unmapped arrow columns"
+    );
     assert!(rendered.contains("1/"), "should show mapped count");
 }
 
@@ -241,15 +256,16 @@ fn validate_human_rendering_shows_errors() {
     let msg = schema.message("fixtures.Scalars").unwrap();
 
     // Bool field gets Int32 — type mismatch triggers a type error line.
-    let arrow_schema = Schema::new(vec![
-        Field::new("bool_field", DataType::Int32, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("bool_field", DataType::Int32, false)]);
 
     let report = validate(&arrow_schema, &msg, &InferOptions::default());
     let rendered = report.render_human();
 
     assert!(rendered.contains("bool_field"), "should contain field name");
-    assert!(rendered.contains("missing"), "should show missing proto fields");
+    assert!(
+        rendered.contains("missing"),
+        "should show missing proto fields"
+    );
     // Type error for bool_field (Int32 vs bool) should show the reason.
     assert!(
         rendered.contains("no mapping") || rendered.contains("incompatible"),

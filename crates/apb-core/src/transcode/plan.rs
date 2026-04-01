@@ -188,9 +188,14 @@ fn build_encoder_kind(
     match shape {
         FieldShape::Scalar => {
             // Special case: Utf8 → enum via name lookup.
-            if matches!((arrow_type, proto_kind, mode),
-                (DataType::Utf8 | DataType::LargeUtf8, Kind::Enum(_), TypeCheckMode::Coerce { .. }))
-            {
+            if matches!(
+                (arrow_type, proto_kind, mode),
+                (
+                    DataType::Utf8 | DataType::LargeUtf8,
+                    Kind::Enum(_),
+                    TypeCheckMode::Coerce { .. }
+                )
+            ) {
                 if let Kind::Enum(enum_desc) = proto_kind {
                     let name_to_number: std::collections::HashMap<String, i32> = enum_desc
                         .values()
@@ -278,9 +283,23 @@ fn build_encoder_kind(
                 2, // map entry value is always field 2
             )?;
 
-            let key_tag = wire::encode_tag(1, scalar_wire_type(&key_type_check.arrow_type, &key_type_check.proto_kind, &key_type_check.mode)?);
+            let key_tag = wire::encode_tag(
+                1,
+                scalar_wire_type(
+                    &key_type_check.arrow_type,
+                    &key_type_check.proto_kind,
+                    &key_type_check.mode,
+                )?,
+            );
             let value_tag = match value_shape.as_ref() {
-                FieldShape::Scalar => wire::encode_tag(2, scalar_wire_type(&value_type_check.arrow_type, &value_type_check.proto_kind, &value_type_check.mode)?),
+                FieldShape::Scalar => wire::encode_tag(
+                    2,
+                    scalar_wire_type(
+                        &value_type_check.arrow_type,
+                        &value_type_check.proto_kind,
+                        &value_type_check.mode,
+                    )?,
+                ),
                 _ => wire::encode_tag(2, wire::WIRE_LENGTH_DELIMITED),
             };
 
@@ -350,9 +369,7 @@ fn select_scalar_encoder(
 
     let result: (ScalarEncodeFn, u8) = match (arrow_type, proto_kind, mode) {
         // === Direct lossless ===
-        (Boolean, Kind::Bool, TypeCheckMode::Direct) => {
-            (encode::encode_bool, wire::WIRE_VARINT)
-        }
+        (Boolean, Kind::Bool, TypeCheckMode::Direct) => (encode::encode_bool, wire::WIRE_VARINT),
 
         (Int32, Kind::Int32, TypeCheckMode::Direct) => {
             (encode::encode_int32_varint, wire::WIRE_VARINT)
@@ -415,24 +432,32 @@ fn select_scalar_encoder(
 
         // === Well-known types (Arrow scalar → proto message) ===
         // These are length-delimited because they encode as proto messages.
-        (Timestamp(arrow_schema::TimeUnit::Second, _), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Timestamp" =>
-        {
+        (
+            Timestamp(arrow_schema::TimeUnit::Second, _),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Timestamp" => {
             (encode::encode_timestamp_s, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Timestamp(arrow_schema::TimeUnit::Millisecond, _), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Timestamp" =>
-        {
+        (
+            Timestamp(arrow_schema::TimeUnit::Millisecond, _),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Timestamp" => {
             (encode::encode_timestamp_ms, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Timestamp(arrow_schema::TimeUnit::Microsecond, _), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Timestamp" =>
-        {
+        (
+            Timestamp(arrow_schema::TimeUnit::Microsecond, _),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Timestamp" => {
             (encode::encode_timestamp_us, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Timestamp(arrow_schema::TimeUnit::Nanosecond, _), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Timestamp" =>
-        {
+        (
+            Timestamp(arrow_schema::TimeUnit::Nanosecond, _),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Timestamp" => {
             (encode::encode_timestamp_ns, wire::WIRE_LENGTH_DELIMITED)
         }
         (Duration(arrow_schema::TimeUnit::Second), Kind::Message(desc), TypeCheckMode::Direct)
@@ -440,19 +465,25 @@ fn select_scalar_encoder(
         {
             (encode::encode_duration_s, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Duration(arrow_schema::TimeUnit::Millisecond), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Duration" =>
-        {
+        (
+            Duration(arrow_schema::TimeUnit::Millisecond),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Duration" => {
             (encode::encode_duration_ms, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Duration(arrow_schema::TimeUnit::Microsecond), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Duration" =>
-        {
+        (
+            Duration(arrow_schema::TimeUnit::Microsecond),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Duration" => {
             (encode::encode_duration_us, wire::WIRE_LENGTH_DELIMITED)
         }
-        (Duration(arrow_schema::TimeUnit::Nanosecond), Kind::Message(desc), TypeCheckMode::Direct)
-            if desc.full_name() == "google.protobuf.Duration" =>
-        {
+        (
+            Duration(arrow_schema::TimeUnit::Nanosecond),
+            Kind::Message(desc),
+            TypeCheckMode::Direct,
+        ) if desc.full_name() == "google.protobuf.Duration" => {
             (encode::encode_duration_ns, wire::WIRE_LENGTH_DELIMITED)
         }
 

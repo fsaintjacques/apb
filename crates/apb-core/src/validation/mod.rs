@@ -55,7 +55,12 @@ pub fn validate(
                     path: report.message_name.clone(),
                     message: format!(
                         "unmapped proto fields not allowed: {}",
-                        report.unmapped_proto.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
+                        report
+                            .unmapped_proto
+                            .iter()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 });
             }
@@ -65,7 +70,12 @@ pub fn validate(
                     path: report.message_name.clone(),
                     message: format!(
                         "unmapped Arrow fields not allowed: {}",
-                        report.unmapped_arrow.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ")
+                        report
+                            .unmapped_arrow
+                            .iter()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 });
             }
@@ -76,10 +86,7 @@ pub fn validate(
     }
 }
 
-fn collect_all_diagnostics(
-    arrow_fields: &Fields,
-    message: &MessageDescriptor,
-) -> MappingReport {
+fn collect_all_diagnostics(arrow_fields: &Fields, message: &MessageDescriptor) -> MappingReport {
     let mut mapped = Vec::new();
     let mut type_errors = Vec::new();
     let mut structural_errors = Vec::new();
@@ -93,8 +100,13 @@ fn collect_all_diagnostics(
             if oneof.fields().len() > 1 {
                 if processed_oneofs.insert(oneof.name().to_string()) {
                     validate_oneof(
-                        arrow_fields, &oneof, &mut bound_arrow_indices,
-                        &mut mapped, &mut type_errors, &mut structural_errors, &mut unmapped_proto,
+                        arrow_fields,
+                        &oneof,
+                        &mut bound_arrow_indices,
+                        &mut mapped,
+                        &mut type_errors,
+                        &mut structural_errors,
+                        &mut unmapped_proto,
                     );
                 }
                 continue;
@@ -102,8 +114,14 @@ fn collect_all_diagnostics(
         }
 
         validate_field(
-            arrow_fields, &proto_field, &mut bound_arrow_indices,
-            &mut mapped, &mut type_errors, &mut structural_errors, &mut nested_reports, &mut unmapped_proto,
+            arrow_fields,
+            &proto_field,
+            &mut bound_arrow_indices,
+            &mut mapped,
+            &mut type_errors,
+            &mut structural_errors,
+            &mut nested_reports,
+            &mut unmapped_proto,
         );
     }
 
@@ -118,7 +136,9 @@ fn collect_all_diagnostics(
         })
         .collect();
 
-    let nested_has_errors = nested_reports.iter().any(|n| n.report.status == ReportStatus::Error);
+    let nested_has_errors = nested_reports
+        .iter()
+        .any(|n| n.report.status == ReportStatus::Error);
     let has_errors = !type_errors.is_empty() || !structural_errors.is_empty() || nested_has_errors;
     let has_warnings = !unmapped_arrow.is_empty() || !unmapped_proto.is_empty();
 
@@ -325,7 +345,11 @@ fn validate_oneof(
         _ => {
             structural_errors.push(StructuralError {
                 path: oneof.name().to_string(),
-                message: format!("oneof '{}': expected Struct, got {}", oneof.name(), arrow_field.data_type()),
+                message: format!(
+                    "oneof '{}': expected Struct, got {}",
+                    oneof.name(),
+                    arrow_field.data_type()
+                ),
             });
             return;
         }

@@ -9,11 +9,17 @@ pub use enum_behavior::UnknownEnumBehavior;
 
 pub use plan::PlanError;
 
-use arrow_array::{Array, BinaryArray, LargeStringArray, ListArray, LargeListArray, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_array::{
+    Array, BinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray, RecordBatch,
+    StringArray, StructArray,
+};
 use arrow_buffer::{Buffer, OffsetBuffer};
 
 use crate::mapping::FieldMapping;
-use plan::{EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder, FieldEncoderKind, MapEncoder, MessageEncoder, OneofEncoder, RepeatedEncoder};
+use plan::{
+    EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder, FieldEncoderKind, MapEncoder,
+    MessageEncoder, OneofEncoder, RepeatedEncoder,
+};
 
 /// Error during transcoding.
 #[derive(Debug, thiserror::Error)]
@@ -92,10 +98,7 @@ impl Transcoder {
     }
 
     /// Transcode a batch into an Arrow `BinaryArray`.
-    pub fn transcode_arrow(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<BinaryArray, TranscodeError> {
+    pub fn transcode_arrow(&self, batch: &RecordBatch) -> Result<BinaryArray, TranscodeError> {
         let num_rows = batch.num_rows();
         let mut msg_buf = Vec::with_capacity(256);
         let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
@@ -174,7 +177,14 @@ fn encode_field(
         FieldEncoderKind::EnumLookup(lookup) => {
             let before = buf.len();
             buf.extend_from_slice(&encoder.tag);
-            let wrote = encode_enum_lookup(buf, row, array, lookup, &encoder.arrow_name, &encoder.proto_name)?;
+            let wrote = encode_enum_lookup(
+                buf,
+                row,
+                array,
+                lookup,
+                &encoder.arrow_name,
+                &encoder.proto_name,
+            )?;
             if !wrote {
                 buf.truncate(before); // undo tag for Skip
             }
@@ -383,11 +393,13 @@ fn encode_map(
         entry_buf.extend_from_slice(&map_enc.key_tag);
         match &*map_enc.key_kind {
             FieldEncoderKind::Scalar(encode_fn) => {
-                encode_fn(keys.as_ref(), i, &mut entry_buf).map_err(|e| TranscodeError::FieldError {
-                    row,
-                    arrow_field: format!("{field_name}[{}].key", i - start),
-                    proto_field: format!("{field_name}[{}].key", i - start),
-                    reason: e.reason,
+                encode_fn(keys.as_ref(), i, &mut entry_buf).map_err(|e| {
+                    TranscodeError::FieldError {
+                        row,
+                        arrow_field: format!("{field_name}[{}].key", i - start),
+                        proto_field: format!("{field_name}[{}].key", i - start),
+                        reason: e.reason,
+                    }
                 })?;
             }
             _ => unreachable!("proto map keys must be scalar types"),
@@ -398,11 +410,13 @@ fn encode_map(
             entry_buf.extend_from_slice(&map_enc.value_tag);
             match &*map_enc.value_kind {
                 FieldEncoderKind::Scalar(encode_fn) => {
-                    encode_fn(values.as_ref(), i, &mut entry_buf).map_err(|e| TranscodeError::FieldError {
-                        row,
-                        arrow_field: format!("{field_name}[{}].value", i - start),
-                        proto_field: format!("{field_name}[{}].value", i - start),
-                        reason: e.reason,
+                    encode_fn(values.as_ref(), i, &mut entry_buf).map_err(|e| {
+                        TranscodeError::FieldError {
+                            row,
+                            arrow_field: format!("{field_name}[{}].value", i - start),
+                            proto_field: format!("{field_name}[{}].value", i - start),
+                            reason: e.reason,
+                        }
                     })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
@@ -451,15 +465,24 @@ fn encode_oneof(
             buf.extend_from_slice(&variant.tag);
             match &*variant.kind {
                 FieldEncoderKind::Scalar(encode_fn) => {
-                    encode_fn(child.as_ref(), row, buf).map_err(|e| TranscodeError::FieldError {
-                        row,
-                        arrow_field: variant.proto_name.clone(),
-                        proto_field: variant.proto_name.clone(),
-                        reason: e.reason,
+                    encode_fn(child.as_ref(), row, buf).map_err(|e| {
+                        TranscodeError::FieldError {
+                            row,
+                            arrow_field: variant.proto_name.clone(),
+                            proto_field: variant.proto_name.clone(),
+                            reason: e.reason,
+                        }
                     })?;
                 }
                 FieldEncoderKind::EnumLookup(lookup) => {
-                    let wrote = encode_enum_lookup(buf, row, child.as_ref(), lookup, &variant.proto_name, &variant.proto_name)?;
+                    let wrote = encode_enum_lookup(
+                        buf,
+                        row,
+                        child.as_ref(),
+                        lookup,
+                        &variant.proto_name,
+                        &variant.proto_name,
+                    )?;
                     if !wrote {
                         // Undo the tag written before the match.
                         let tag_len = variant.tag.len();

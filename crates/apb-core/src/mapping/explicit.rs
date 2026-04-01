@@ -51,16 +51,14 @@ pub fn explicit_mapping(
     for binding in bindings {
         // Resolve Arrow field.
         let (arrow_index, arrow_field) = match &binding.arrow_field {
-            ArrowFieldRef::Name(name) => {
-                arrow_schema
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, f)| f.name() == name)
-                    .ok_or_else(|| MappingError::ArrowFieldNotFound {
-                        reference: name.clone(),
-                    })?
-            }
+            ArrowFieldRef::Name(name) => arrow_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.name() == name)
+                .ok_or_else(|| MappingError::ArrowFieldNotFound {
+                    reference: name.clone(),
+                })?,
             ArrowFieldRef::Index(idx) => {
                 let field = arrow_schema.fields().get(*idx).ok_or_else(|| {
                     MappingError::ArrowFieldNotFound {
@@ -72,18 +70,21 @@ pub fn explicit_mapping(
         };
 
         // Resolve proto field.
-        let proto_field = match &binding.proto_field {
-            ProtoFieldRef::Name(name) => message
-                .get_field_by_name(name)
-                .ok_or_else(|| MappingError::ProtoFieldNotFound {
-                    reference: name.clone(),
+        let proto_field =
+            match &binding.proto_field {
+                ProtoFieldRef::Name(name) => message.get_field_by_name(name).ok_or_else(|| {
+                    MappingError::ProtoFieldNotFound {
+                        reference: name.clone(),
+                    }
                 })?,
-            ProtoFieldRef::Number(num) => message
-                .get_field(*num)
-                .ok_or_else(|| MappingError::ProtoFieldNotFound {
-                    reference: format!("field number {num}"),
-                })?,
-        };
+                ProtoFieldRef::Number(num) => {
+                    message
+                        .get_field(*num)
+                        .ok_or_else(|| MappingError::ProtoFieldNotFound {
+                            reference: format!("field number {num}"),
+                        })?
+                }
+            };
 
         // Check for duplicate Arrow field.
         if !bound_arrow_indices.insert(arrow_index) {
@@ -100,11 +101,8 @@ pub fn explicit_mapping(
         }
 
         // Resolve type.
-        let (type_check, field_shape) = resolve_explicit_field(
-            arrow_field.data_type(),
-            &proto_field,
-            binding.coerce,
-        )?;
+        let (type_check, field_shape) =
+            resolve_explicit_field(arrow_field.data_type(), &proto_field, binding.coerce)?;
 
         field_bindings.push(FieldBinding {
             arrow_index,
@@ -161,7 +159,10 @@ fn resolve_explicit_field(
         Kind::Message(_msg_desc) => {
             // Check if it's a well-known type.
             let compat = check_compatibility(arrow_type, &proto_field.kind());
-            if matches!(compat, TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }) {
+            if matches!(
+                compat,
+                TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }
+            ) {
                 let tc = resolve_type_check(arrow_type, &proto_field.kind(), coerce)?;
                 Ok((tc, FieldShape::Scalar))
             } else {

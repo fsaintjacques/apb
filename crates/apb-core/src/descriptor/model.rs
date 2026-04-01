@@ -148,7 +148,10 @@ mod tests {
         assert_eq!(oneofs[0].name(), "choice");
 
         let variant_names: Vec<_> = oneofs[0].fields().map(|f| f.name().to_string()).collect();
-        assert_eq!(variant_names, vec!["text_value", "int_value", "message_value"]);
+        assert_eq!(
+            variant_names,
+            vec!["text_value", "int_value", "message_value"]
+        );
     }
 
     #[test]
@@ -160,7 +163,10 @@ mod tests {
         if let Kind::Enum(enum_desc) = status.kind() {
             assert_eq!(enum_desc.name(), "Status");
             let names: Vec<_> = enum_desc.values().map(|v| v.name().to_string()).collect();
-            assert_eq!(names, vec!["STATUS_UNKNOWN", "STATUS_ACTIVE", "STATUS_INACTIVE"]);
+            assert_eq!(
+                names,
+                vec!["STATUS_UNKNOWN", "STATUS_ACTIVE", "STATUS_INACTIVE"]
+            );
         } else {
             panic!("expected enum kind");
         }

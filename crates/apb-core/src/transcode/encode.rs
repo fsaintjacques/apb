@@ -24,7 +24,11 @@ pub type ScalarEncodeFn =
 
 // === Boolean ===
 
-pub fn encode_bool(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_bool(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
     let v = if arr.value(row) { 1u64 } else { 0u64 };
     wire::encode_varint(v, buf);
@@ -33,19 +37,31 @@ pub fn encode_bool(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>
 
 // === Int32 variants ===
 
-pub fn encode_int32_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_varint(arr.value(row) as u32 as u64, buf);
     Ok(())
 }
 
-pub fn encode_int32_zigzag(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_zigzag(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_zigzag32(arr.value(row), buf);
     Ok(())
 }
 
-pub fn encode_int32_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_fixed(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_fixed32(arr.value(row) as u32, buf);
     Ok(())
@@ -53,19 +69,31 @@ pub fn encode_int32_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut 
 
 // === Int64 variants ===
 
-pub fn encode_int64_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
     wire::encode_varint(arr.value(row) as u64, buf);
     Ok(())
 }
 
-pub fn encode_int64_zigzag(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_zigzag(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
     wire::encode_zigzag64(arr.value(row), buf);
     Ok(())
 }
 
-pub fn encode_int64_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_fixed(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
     wire::encode_fixed64(arr.value(row) as u64, buf);
     Ok(())
@@ -73,13 +101,21 @@ pub fn encode_int64_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut 
 
 // === UInt32 variants ===
 
-pub fn encode_uint32_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
     wire::encode_varint(arr.value(row) as u64, buf);
     Ok(())
 }
 
-pub fn encode_uint32_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint32_fixed(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
     wire::encode_fixed32(arr.value(row), buf);
     Ok(())
@@ -87,13 +123,21 @@ pub fn encode_uint32_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut
 
 // === UInt64 variants ===
 
-pub fn encode_uint64_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
     wire::encode_varint(arr.value(row), buf);
     Ok(())
 }
 
-pub fn encode_uint64_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint64_fixed(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
     wire::encode_fixed64(arr.value(row), buf);
     Ok(())
@@ -101,13 +145,21 @@ pub fn encode_uint64_fixed(array: &dyn arrow_array::Array, row: usize, buf: &mut
 
 // === Float ===
 
-pub fn encode_float32(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_float32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
     wire::encode_fixed32(arr.value(row).to_bits(), buf);
     Ok(())
 }
 
-pub fn encode_float64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_float64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
     wire::encode_fixed64(arr.value(row).to_bits(), buf);
     Ok(())
@@ -115,25 +167,41 @@ pub fn encode_float64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<
 
 // === String / Bytes ===
 
-pub fn encode_utf8(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_utf8(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
     wire::encode_length_delimited(arr.value(row).as_bytes(), buf);
     Ok(())
 }
 
-pub fn encode_large_utf8(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_large_utf8(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
     wire::encode_length_delimited(arr.value(row).as_bytes(), buf);
     Ok(())
 }
 
-pub fn encode_binary(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_binary(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<BinaryArray>().unwrap();
     wire::encode_length_delimited(arr.value(row), buf);
     Ok(())
 }
 
-pub fn encode_large_binary(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_large_binary(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
     wire::encode_length_delimited(arr.value(row), buf);
     Ok(())
@@ -170,7 +238,11 @@ fn read_u64_as_u32(array: &dyn arrow_array::Array, row: usize) -> Result<u32, En
 }
 
 // Int64 → int32 (varint, sign-extended to 64 bits per proto spec)
-pub fn encode_int64_as_int32_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_as_int32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let v = read_i64_as_i32(array, row)?;
     // Proto int32 negative values are sign-extended to 64 bits on the wire.
     wire::encode_varint(v as u64, buf);
@@ -178,87 +250,139 @@ pub fn encode_int64_as_int32_varint(array: &dyn arrow_array::Array, row: usize, 
 }
 
 // Int64 → sint32 (zigzag)
-pub fn encode_int64_as_sint32(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_as_sint32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let v = read_i64_as_i32(array, row)?;
     wire::encode_zigzag32(v, buf);
     Ok(())
 }
 
 // Int64 → sfixed32 (fixed 4 bytes)
-pub fn encode_int64_as_sfixed32(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int64_as_sfixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let v = read_i64_as_i32(array, row)?;
     wire::encode_fixed32(v as u32, buf);
     Ok(())
 }
 
 // Int32 → int64 (varint, widening)
-pub fn encode_int32_as_int64_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_as_int64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_varint(arr.value(row) as i64 as u64, buf);
     Ok(())
 }
 
 // Int32 → sint64 (zigzag, widening)
-pub fn encode_int32_as_sint64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_as_sint64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_zigzag64(arr.value(row) as i64, buf);
     Ok(())
 }
 
 // Int32 → sfixed64 (fixed 8 bytes, widening)
-pub fn encode_int32_as_sfixed64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_as_sfixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     wire::encode_fixed64(arr.value(row) as i64 as u64, buf);
     Ok(())
 }
 
 // UInt64 → uint32 (varint, truncation check)
-pub fn encode_uint64_as_uint32_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint64_as_uint32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let v = read_u64_as_u32(array, row)?;
     wire::encode_varint(v as u64, buf);
     Ok(())
 }
 
 // UInt64 → fixed32 (fixed 4 bytes, truncation check)
-pub fn encode_uint64_as_fixed32(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint64_as_fixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let v = read_u64_as_u32(array, row)?;
     wire::encode_fixed32(v, buf);
     Ok(())
 }
 
 // UInt32 → uint64 (varint, widening)
-pub fn encode_uint32_as_uint64_varint(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint32_as_uint64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
     wire::encode_varint(arr.value(row) as u64, buf);
     Ok(())
 }
 
 // UInt32 → fixed64 (fixed 8 bytes, widening)
-pub fn encode_uint32_as_fixed64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_uint32_as_fixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
     wire::encode_fixed64(arr.value(row) as u64, buf);
     Ok(())
 }
 
-pub fn encode_float64_as_float32(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_float64_as_float32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
     wire::encode_fixed32((arr.value(row) as f32).to_bits(), buf);
     Ok(())
 }
 
-pub fn encode_float32_as_float64(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_float32_as_float64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
     wire::encode_fixed64((arr.value(row) as f64).to_bits(), buf);
     Ok(())
 }
 
-pub fn encode_utf8_as_bytes(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_utf8_as_bytes(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
     wire::encode_length_delimited(arr.value(row).as_bytes(), buf);
     Ok(())
 }
 
-pub fn encode_binary_as_string(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_binary_as_string(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<BinaryArray>().unwrap();
     let bytes = arr.value(row);
     if std::str::from_utf8(bytes).is_err() {
@@ -274,7 +398,11 @@ pub fn encode_binary_as_string(array: &dyn arrow_array::Array, row: usize, buf: 
 
 // === Enum encoding (Int32 → enum, runtime range check) ===
 
-pub fn encode_int32_as_enum(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+pub fn encode_int32_as_enum(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
     // We encode the value as a varint — range checking happens at the plan level
     // or is deferred to the consumer. Proto3 allows unknown enum values.
@@ -297,7 +425,10 @@ fn encode_seconds_nanos(seconds: i64, nanos: i32, buf: &mut Vec<u8>) {
     let mut len = 0;
 
     macro_rules! push {
-        ($b:expr) => { msg[len] = $b; len += 1; };
+        ($b:expr) => {
+            msg[len] = $b;
+            len += 1;
+        };
     }
 
     if seconds != 0 {
@@ -345,62 +476,118 @@ fn duration_split(value: i64, units_per_second: i64, nanos_per_unit: i64) -> (i6
 }
 
 /// Arrow Timestamp(Second) → google.protobuf.Timestamp
-pub fn encode_timestamp_s(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+pub fn encode_timestamp_s(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<TimestampSecondArray>()
+        .unwrap();
     encode_seconds_nanos(arr.value(row), 0, buf);
     Ok(())
 }
 
 /// Arrow Timestamp(Millisecond) → google.protobuf.Timestamp
-pub fn encode_timestamp_ms(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
+pub fn encode_timestamp_ms(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .unwrap();
     let (s, n) = timestamp_split(arr.value(row), 1_000, 1_000_000);
     encode_seconds_nanos(s, n, buf);
     Ok(())
 }
 
 /// Arrow Timestamp(Microsecond) → google.protobuf.Timestamp
-pub fn encode_timestamp_us(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+pub fn encode_timestamp_us(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
     let (s, n) = timestamp_split(arr.value(row), 1_000_000, 1_000);
     encode_seconds_nanos(s, n, buf);
     Ok(())
 }
 
 /// Arrow Timestamp(Nanosecond) → google.protobuf.Timestamp
-pub fn encode_timestamp_ns(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
+pub fn encode_timestamp_ns(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .unwrap();
     let (s, n) = timestamp_split(arr.value(row), 1_000_000_000, 1);
     encode_seconds_nanos(s, n, buf);
     Ok(())
 }
 
 /// Arrow Duration(Second) → google.protobuf.Duration
-pub fn encode_duration_s(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<DurationSecondArray>().unwrap();
+pub fn encode_duration_s(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<DurationSecondArray>()
+        .unwrap();
     encode_seconds_nanos(arr.value(row), 0, buf);
     Ok(())
 }
 
 /// Arrow Duration(Millisecond) → google.protobuf.Duration
-pub fn encode_duration_ms(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<DurationMillisecondArray>().unwrap();
+pub fn encode_duration_ms(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<DurationMillisecondArray>()
+        .unwrap();
     let (s, n) = duration_split(arr.value(row), 1_000, 1_000_000);
     encode_seconds_nanos(s, n, buf);
     Ok(())
 }
 
 /// Arrow Duration(Microsecond) → google.protobuf.Duration
-pub fn encode_duration_us(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<DurationMicrosecondArray>().unwrap();
+pub fn encode_duration_us(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<DurationMicrosecondArray>()
+        .unwrap();
     let (s, n) = duration_split(arr.value(row), 1_000_000, 1_000);
     encode_seconds_nanos(s, n, buf);
     Ok(())
 }
 
 /// Arrow Duration(Nanosecond) → google.protobuf.Duration
-pub fn encode_duration_ns(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
-    let arr = array.as_any().downcast_ref::<DurationNanosecondArray>().unwrap();
+pub fn encode_duration_ns(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array
+        .as_any()
+        .downcast_ref::<DurationNanosecondArray>()
+        .unwrap();
     let (s, n) = duration_split(arr.value(row), 1_000_000_000, 1);
     encode_seconds_nanos(s, n, buf);
     Ok(())

@@ -205,11 +205,18 @@ fn collect_rows(rows: &mut Vec<Row>, report: &MappingReport, depth: usize) {
                 } else {
                     Status::OkCoerce(f.type_mode.clone())
                 };
-                rows.push(Row { arrow, proto, status, depth });
+                rows.push(Row {
+                    arrow,
+                    proto,
+                    status,
+                    depth,
+                });
 
                 // Recurse into nested message.
                 if f.field_shape == FieldShapeSummary::Message {
-                    if let Some(nested) = report.nested.iter().find(|n| n.proto_field == f.proto_name) {
+                    if let Some(nested) =
+                        report.nested.iter().find(|n| n.proto_field == f.proto_name)
+                    {
                         collect_rows(rows, &nested.report, depth + 1);
                     }
                 }

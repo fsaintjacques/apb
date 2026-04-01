@@ -4,7 +4,9 @@ use arrow_schema::{DataType, Fields, Schema};
 use prost_reflect::{Cardinality, FieldDescriptor, Kind, MessageDescriptor};
 
 use super::model::*;
-use crate::types::{check_compatibility, resolve_type_check, TypeCheck, TypeCheckMode, TypeCompatibility};
+use crate::types::{
+    check_compatibility, resolve_type_check, TypeCheck, TypeCheckMode, TypeCompatibility,
+};
 
 /// Options for infer mode.
 #[derive(Debug, Clone)]
@@ -76,11 +78,7 @@ pub fn infer_mapping(
     message: &MessageDescriptor,
     options: &InferOptions,
 ) -> Result<FieldMapping, MappingError> {
-    let mapping = infer_from_fields(
-        arrow_schema.fields(),
-        message,
-        options,
-    )?;
+    let mapping = infer_from_fields(arrow_schema.fields(), message, options)?;
     Ok(mapping)
 }
 
@@ -124,7 +122,12 @@ fn infer_from_fields(
             }
         }
 
-        match infer_field(arrow_fields, &proto_field, &mut bound_arrow_indices, options) {
+        match infer_field(
+            arrow_fields,
+            &proto_field,
+            &mut bound_arrow_indices,
+            options,
+        ) {
             Ok(Some(binding)) => bindings.push(binding),
             Ok(None) => {
                 unmapped_proto.push(UnmappedProtoField {
@@ -182,24 +185,29 @@ fn infer_field(
     let coerce = field_coerce || options.coerce_all;
 
     // Step 1: find the Arrow field — annotation takes priority over name-match.
-    let (arrow_index, arrow_field, bind_method) =
-        if let Some(ref name) = annotation_name {
-            match arrow_fields.iter().enumerate().find(|(_, f)| f.name() == name) {
-                Some((i, f)) => (i, f, BindMethod::Annotation),
-                None => return Err(MappingError::ArrowFieldNotFound {
+    let (arrow_index, arrow_field, bind_method) = if let Some(ref name) = annotation_name {
+        match arrow_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name() == name)
+        {
+            Some((i, f)) => (i, f, BindMethod::Annotation),
+            None => {
+                return Err(MappingError::ArrowFieldNotFound {
                     reference: name.clone(),
-                }),
+                })
             }
-        } else {
-            match arrow_fields
-                .iter()
-                .enumerate()
-                .find(|(_, f)| f.name() == proto_field.name())
-            {
-                Some((i, f)) => (i, f, BindMethod::NameMatch),
-                None => return Ok(None),
-            }
-        };
+        }
+    } else {
+        match arrow_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name() == proto_field.name())
+        {
+            Some((i, f)) => (i, f, BindMethod::NameMatch),
+            None => return Ok(None),
+        }
+    };
 
     // Check for duplicate binding.
     if !bound_indices.insert(arrow_index) {
@@ -244,7 +252,10 @@ fn resolve_field_shape(
         Kind::Message(msg_desc) => {
             // Check if this is a well-known type that maps directly.
             let compat = check_compatibility(arrow_type, &proto_field.kind());
-            if matches!(compat, TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }) {
+            if matches!(
+                compat,
+                TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }
+            ) {
                 let tc = resolve_type_check(arrow_type, &proto_field.kind(), coerce)?;
                 return Ok((tc, FieldShape::Scalar));
             }
@@ -276,8 +287,8 @@ fn resolve_nested_message(
         }
     };
 
-    let sub_mapping = infer_from_fields(struct_fields, msg_desc, options)
-        .map_err(|e| MappingError::Nested {
+    let sub_mapping =
+        infer_from_fields(struct_fields, msg_desc, options).map_err(|e| MappingError::Nested {
             proto_field: proto_field_name.to_string(),
             source: Box::new(e),
         })?;
@@ -313,7 +324,10 @@ fn resolve_repeated(
         Kind::Message(msg_desc) => {
             // Check well-known type first.
             let compat = check_compatibility(element_type, &proto_field.kind());
-            if matches!(compat, TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }) {
+            if matches!(
+                compat,
+                TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }
+            ) {
                 let tc = resolve_type_check(element_type, &proto_field.kind(), coerce)?;
                 (tc, FieldShape::Scalar)
             } else {
@@ -384,7 +398,10 @@ fn resolve_map(
     let (value_tc, value_shape) = match value_field.kind() {
         Kind::Message(msg_desc) => {
             let compat = check_compatibility(value_type, &value_field.kind());
-            if matches!(compat, TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }) {
+            if matches!(
+                compat,
+                TypeCompatibility::Compatible | TypeCompatibility::CoercionAvailable { .. }
+            ) {
                 let tc = resolve_type_check(value_type, &value_field.kind(), coerce)?;
                 (tc, FieldShape::Scalar)
             } else {

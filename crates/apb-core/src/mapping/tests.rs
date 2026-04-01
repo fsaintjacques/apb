@@ -1,8 +1,8 @@
 use arrow_schema::{DataType, Field, Fields, Schema};
 use std::sync::Arc;
 
-use crate::descriptor::ProtoSchema;
 use super::*;
+use crate::descriptor::ProtoSchema;
 
 const SCALARS_BIN: &[u8] = include_bytes!("../../fixtures/scalars.bin");
 const NESTED_BIN: &[u8] = include_bytes!("../../fixtures/nested.bin");
@@ -41,7 +41,11 @@ fn infer_flat_all_match() {
     assert_eq!(mapping.unmapped_proto.len(), 12);
 
     // Check binding details.
-    let bool_binding = mapping.bindings.iter().find(|b| b.proto_name == "bool_field").unwrap();
+    let bool_binding = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "bool_field")
+        .unwrap();
     assert_eq!(bool_binding.arrow_index, 0);
     assert_eq!(bool_binding.proto_number, 1);
     assert_eq!(bool_binding.bind_method, BindMethod::NameMatch);
@@ -70,9 +74,7 @@ fn infer_no_match() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("foo", DataType::Int32, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("foo", DataType::Int32, false)]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
@@ -87,9 +89,7 @@ fn infer_type_mismatch_error() {
     let msg = schema.message("fixtures.Scalars").unwrap();
 
     // bool_field is proto bool, but we provide Int32 Arrow type.
-    let arrow_schema = Schema::new(vec![
-        Field::new("bool_field", DataType::Int32, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("bool_field", DataType::Int32, false)]);
 
     let result = infer_mapping(&arrow_schema, &msg, &InferOptions::default());
     assert!(result.is_err());
@@ -102,17 +102,19 @@ fn infer_disallow_unmapped_proto() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("bool_field", DataType::Boolean, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("bool_field", DataType::Boolean, false)]);
 
-    let options = InferOptions { coerce_all: false,
+    let options = InferOptions {
+        coerce_all: false,
         allow_unmapped_proto: false,
         allow_unmapped_arrow: true,
     };
 
     let result = infer_mapping(&arrow_schema, &msg, &options);
-    assert!(matches!(result, Err(MappingError::UnmappedProtoNotAllowed { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::UnmappedProtoNotAllowed { .. })
+    ));
 }
 
 #[test]
@@ -125,13 +127,17 @@ fn infer_disallow_unmapped_arrow() {
         Field::new("extra", DataType::Utf8, false),
     ]);
 
-    let options = InferOptions { coerce_all: false,
+    let options = InferOptions {
+        coerce_all: false,
         allow_unmapped_proto: true,
         allow_unmapped_arrow: false,
     };
 
     let result = infer_mapping(&arrow_schema, &msg, &options);
-    assert!(matches!(result, Err(MappingError::UnmappedArrowNotAllowed { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::UnmappedArrowNotAllowed { .. })
+    ));
 }
 
 // ==================== Infer: nested message ====================
@@ -141,12 +147,14 @@ fn infer_nested_message() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("inner", DataType::Struct(Fields::from(vec![
+    let arrow_schema = Schema::new(vec![Field::new(
+        "inner",
+        DataType::Struct(Fields::from(vec![
             Field::new("value", DataType::Utf8, false),
             Field::new("count", DataType::Int32, false),
-        ])), true),
-    ]);
+        ])),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
@@ -170,9 +178,11 @@ fn infer_repeated_scalar() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("tags", DataType::List(Arc::new(Field::new("item", DataType::Int32, false))), true),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new(
+        "tags",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
@@ -186,16 +196,18 @@ fn infer_repeated_message() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("items", DataType::List(Arc::new(Field::new(
+    let arrow_schema = Schema::new(vec![Field::new(
+        "items",
+        DataType::List(Arc::new(Field::new(
             "item",
             DataType::Struct(Fields::from(vec![
                 Field::new("value", DataType::Utf8, false),
                 Field::new("count", DataType::Int32, false),
             ])),
             true,
-        ))), true),
-    ]);
+        ))),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
@@ -215,20 +227,29 @@ fn infer_map_field() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("metadata", DataType::Map(
-            Arc::new(Field::new("entries", DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Int64, false),
-            ])), false)),
+    let arrow_schema = Schema::new(vec![Field::new(
+        "metadata",
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int64, false),
+                ])),
+                false,
+            )),
             false,
-        ), true),
-    ]);
+        ),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
     assert_eq!(mapping.bindings.len(), 1);
-    assert!(matches!(&mapping.bindings[0].field_shape, FieldShape::Map { .. }));
+    assert!(matches!(
+        &mapping.bindings[0].field_shape,
+        FieldShape::Map { .. }
+    ));
 }
 
 // ==================== Infer: oneof ====================
@@ -238,12 +259,14 @@ fn infer_oneof() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("choice", DataType::Struct(Fields::from(vec![
+    let arrow_schema = Schema::new(vec![Field::new(
+        "choice",
+        DataType::Struct(Fields::from(vec![
             Field::new("text_value", DataType::Utf8, true),
             Field::new("int_value", DataType::Int32, true),
-        ])), true),
-    ]);
+        ])),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
@@ -262,9 +285,7 @@ fn infer_oneof_not_struct_error() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("choice", DataType::Utf8, true),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("choice", DataType::Utf8, true)]);
 
     let result = infer_mapping(&arrow_schema, &msg, &InferOptions::default());
     assert!(matches!(result, Err(MappingError::OneofNotStruct { .. })));
@@ -277,9 +298,7 @@ fn infer_enum_field() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("status", DataType::Int32, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("status", DataType::Int32, false)]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
     assert_eq!(mapping.bindings.len(), 1);
@@ -324,9 +343,7 @@ fn explicit_by_index_and_number() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("col0", DataType::Boolean, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("col0", DataType::Boolean, false)]);
 
     let bindings = vec![ExplicitBinding {
         arrow_field: ArrowFieldRef::Index(0),
@@ -353,7 +370,10 @@ fn explicit_missing_arrow_field() {
     }];
 
     let result = explicit_mapping(&arrow_schema, &msg, &bindings);
-    assert!(matches!(result, Err(MappingError::ArrowFieldNotFound { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::ArrowFieldNotFound { .. })
+    ));
 }
 
 #[test]
@@ -361,9 +381,7 @@ fn explicit_missing_proto_field() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("col0", DataType::Boolean, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("col0", DataType::Boolean, false)]);
 
     let bindings = vec![ExplicitBinding {
         arrow_field: ArrowFieldRef::Name("col0".to_string()),
@@ -372,7 +390,10 @@ fn explicit_missing_proto_field() {
     }];
 
     let result = explicit_mapping(&arrow_schema, &msg, &bindings);
-    assert!(matches!(result, Err(MappingError::ProtoFieldNotFound { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::ProtoFieldNotFound { .. })
+    ));
 }
 
 #[test]
@@ -381,9 +402,7 @@ fn explicit_coercion() {
     let msg = schema.message("fixtures.Scalars").unwrap();
 
     // Int64 → int32 requires coercion.
-    let arrow_schema = Schema::new(vec![
-        Field::new("col0", DataType::Int64, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("col0", DataType::Int64, false)]);
 
     // Without coerce → error.
     let bindings_no_coerce = vec![ExplicitBinding {
@@ -408,9 +427,7 @@ fn explicit_duplicate_arrow() {
     let schema = scalars_schema();
     let msg = schema.message("fixtures.Scalars").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("col0", DataType::Boolean, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("col0", DataType::Boolean, false)]);
 
     let bindings = vec![
         ExplicitBinding {
@@ -453,7 +470,10 @@ fn explicit_duplicate_proto() {
     ];
 
     let result = explicit_mapping(&arrow_schema, &msg, &bindings);
-    assert!(matches!(result, Err(MappingError::DuplicateProtoBinding { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::DuplicateProtoBinding { .. })
+    ));
 }
 
 #[test]
@@ -461,11 +481,15 @@ fn explicit_nested_message_unsupported() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("inner", DataType::Struct(Fields::from(vec![
-            Field::new("value", DataType::Utf8, false),
-        ])), true),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new(
+        "inner",
+        DataType::Struct(Fields::from(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )])),
+        true,
+    )]);
 
     let bindings = vec![ExplicitBinding {
         arrow_field: ArrowFieldRef::Name("inner".to_string()),
@@ -474,7 +498,10 @@ fn explicit_nested_message_unsupported() {
     }];
 
     let result = explicit_mapping(&arrow_schema, &msg, &bindings);
-    assert!(matches!(result, Err(MappingError::UnsupportedExplicitNested { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::UnsupportedExplicitNested { .. })
+    ));
 }
 
 #[test]
@@ -482,13 +509,18 @@ fn infer_repeated_large_list() {
     let schema = nested_schema();
     let msg = schema.message("fixtures.Nested").unwrap();
 
-    let arrow_schema = Schema::new(vec![
-        Field::new("tags", DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false))), true),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new(
+        "tags",
+        DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false))),
+        true,
+    )]);
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
     assert_eq!(mapping.bindings.len(), 1);
-    assert!(matches!(&mapping.bindings[0].field_shape, FieldShape::Repeated { .. }));
+    assert!(matches!(
+        &mapping.bindings[0].field_shape,
+        FieldShape::Repeated { .. }
+    ));
 }
 
 // ==================== Infer: annotations ====================
@@ -507,11 +539,19 @@ fn infer_annotation_arrow_name() {
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
     // user_id should bind via annotation, name via name-match.
-    let uid_binding = mapping.bindings.iter().find(|b| b.proto_name == "user_id").unwrap();
+    let uid_binding = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "user_id")
+        .unwrap();
     assert_eq!(uid_binding.arrow_name, "uid");
     assert_eq!(uid_binding.bind_method, BindMethod::Annotation);
 
-    let name_binding = mapping.bindings.iter().find(|b| b.proto_name == "name").unwrap();
+    let name_binding = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "name")
+        .unwrap();
     assert_eq!(name_binding.arrow_name, "name");
     assert_eq!(name_binding.bind_method, BindMethod::NameMatch);
 }
@@ -522,12 +562,13 @@ fn infer_annotation_missing_arrow_field_error() {
     let msg = schema.message("fixtures.Annotated").unwrap();
 
     // Annotation says arrow_name = "uid", but no such Arrow field exists.
-    let arrow_schema = Schema::new(vec![
-        Field::new("user_id", DataType::Utf8, false),
-    ]);
+    let arrow_schema = Schema::new(vec![Field::new("user_id", DataType::Utf8, false)]);
 
     let result = infer_mapping(&arrow_schema, &msg, &InferOptions::default());
-    assert!(matches!(result, Err(MappingError::ArrowFieldNotFound { .. })));
+    assert!(matches!(
+        result,
+        Err(MappingError::ArrowFieldNotFound { .. })
+    ));
 }
 
 #[test]
@@ -545,7 +586,11 @@ fn infer_annotation_coerce() {
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
-    let count_binding = mapping.bindings.iter().find(|b| b.proto_name == "count").unwrap();
+    let count_binding = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "count")
+        .unwrap();
     assert_eq!(count_binding.arrow_name, "count");
     // Should succeed because coercion is enabled via annotation.
     assert!(matches!(
@@ -568,7 +613,11 @@ fn infer_annotation_priority_over_name() {
 
     let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
 
-    let uid_binding = mapping.bindings.iter().find(|b| b.proto_name == "user_id").unwrap();
+    let uid_binding = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "user_id")
+        .unwrap();
     assert_eq!(uid_binding.arrow_name, "uid");
     assert_eq!(uid_binding.bind_method, BindMethod::Annotation);
 

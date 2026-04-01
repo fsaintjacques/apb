@@ -1,5 +1,5 @@
-mod compatibility;
 mod coercion;
+mod compatibility;
 
 pub use coercion::CoercionRisk;
 pub use compatibility::{

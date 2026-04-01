@@ -135,41 +135,51 @@ fn check_resolved(arrow_type: &DataType, proto_kind: &Kind) -> TypeCompatibility
         (Int32, Kind::Enum(_)) => Compatible,
 
         // === Coercions: integer narrowing / widening ===
-        (Int64, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => {
-            CoercionAvailable { risk: CoercionRisk::Truncation }
-        }
-        (Int32, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => {
-            CoercionAvailable { risk: CoercionRisk::Lossless }
-        }
-        (UInt64, Kind::Uint32 | Kind::Fixed32) => {
-            CoercionAvailable { risk: CoercionRisk::Truncation }
-        }
-        (UInt32, Kind::Uint64 | Kind::Fixed64) => {
-            CoercionAvailable { risk: CoercionRisk::Lossless }
-        }
+        (Int64, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => CoercionAvailable {
+            risk: CoercionRisk::Truncation,
+        },
+        (Int32, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => CoercionAvailable {
+            risk: CoercionRisk::Lossless,
+        },
+        (UInt64, Kind::Uint32 | Kind::Fixed32) => CoercionAvailable {
+            risk: CoercionRisk::Truncation,
+        },
+        (UInt32, Kind::Uint64 | Kind::Fixed64) => CoercionAvailable {
+            risk: CoercionRisk::Lossless,
+        },
 
         // === Coercions: float narrowing ===
-        (Float64, Kind::Float) => CoercionAvailable { risk: CoercionRisk::PrecisionLoss },
+        (Float64, Kind::Float) => CoercionAvailable {
+            risk: CoercionRisk::PrecisionLoss,
+        },
 
         // === Coercions: string/bytes crossover ===
-        (Utf8 | LargeUtf8, Kind::Bytes) => CoercionAvailable { risk: CoercionRisk::Semantic },
-        (Binary | LargeBinary, Kind::String) => {
-            CoercionAvailable { risk: CoercionRisk::RuntimeCheck }
-        }
+        (Utf8 | LargeUtf8, Kind::Bytes) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        (Binary | LargeBinary, Kind::String) => CoercionAvailable {
+            risk: CoercionRisk::RuntimeCheck,
+        },
 
         // === Coercions: enum ===
-        (Int64, Kind::Enum(_)) => CoercionAvailable { risk: CoercionRisk::Truncation },
-        (Utf8 | LargeUtf8, Kind::Enum(_)) => {
-            CoercionAvailable { risk: CoercionRisk::RuntimeCheck }
-        }
+        (Int64, Kind::Enum(_)) => CoercionAvailable {
+            risk: CoercionRisk::Truncation,
+        },
+        (Utf8 | LargeUtf8, Kind::Enum(_)) => CoercionAvailable {
+            risk: CoercionRisk::RuntimeCheck,
+        },
 
         // === Coercions: float widening ===
-        (Float32, Kind::Double) => CoercionAvailable { risk: CoercionRisk::Lossless },
+        (Float32, Kind::Double) => CoercionAvailable {
+            risk: CoercionRisk::Lossless,
+        },
 
         // === Lossless: temporal → well-known proto types ===
         // Arrow Timestamp → google.protobuf.Timestamp: the transcoder converts
         // the Arrow value (in its TimeUnit) to seconds + nanos. Lossless.
-        (Timestamp(_, _), Kind::Message(desc)) if desc.full_name() == "google.protobuf.Timestamp" => {
+        (Timestamp(_, _), Kind::Message(desc))
+            if desc.full_name() == "google.protobuf.Timestamp" =>
+        {
             Compatible
         }
         // Arrow Duration → google.protobuf.Duration: same seconds + nanos split.
@@ -181,15 +191,15 @@ fn check_resolved(arrow_type: &DataType, proto_kind: &Kind) -> TypeCompatibility
         // Note: timezone information (if present) is silently discarded.
         // The raw epoch value is used as-is; the unit (seconds, millis, micros,
         // nanos) is not converted — the consumer must know the unit.
-        (Timestamp(_, _), Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => {
-            CoercionAvailable { risk: CoercionRisk::Semantic }
-        }
-        (Date32, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => {
-            CoercionAvailable { risk: CoercionRisk::Semantic }
-        }
-        (Date64, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => {
-            CoercionAvailable { risk: CoercionRisk::Semantic }
-        }
+        (Timestamp(_, _), Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        (Date32, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        (Date64, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
 
         // === Everything else is incompatible ===
         _ => Incompatible {
@@ -251,8 +261,7 @@ mod tests {
     use prost_reflect::{DescriptorPool, EnumDescriptor};
 
     fn make_pool(bytes: &[u8]) -> DescriptorPool {
-        let fds =
-            <prost_types::FileDescriptorSet as prost::Message>::decode(bytes).unwrap();
+        let fds = <prost_types::FileDescriptorSet as prost::Message>::decode(bytes).unwrap();
         DescriptorPool::from_file_descriptor_set(fds).unwrap()
     }
 
@@ -271,12 +280,18 @@ mod tests {
 
     fn timestamp_message_kind() -> Kind {
         let pool = wellknown_pool();
-        Kind::Message(pool.get_message_by_name("google.protobuf.Timestamp").unwrap())
+        Kind::Message(
+            pool.get_message_by_name("google.protobuf.Timestamp")
+                .unwrap(),
+        )
     }
 
     fn duration_message_kind() -> Kind {
         let pool = wellknown_pool();
-        Kind::Message(pool.get_message_by_name("google.protobuf.Duration").unwrap())
+        Kind::Message(
+            pool.get_message_by_name("google.protobuf.Duration")
+                .unwrap(),
+        )
     }
 
     // ==================== Lossless pairs ====================
@@ -569,7 +584,12 @@ mod tests {
     #[test]
     fn compatible_timestamp_to_wellknown_timestamp() {
         let kind = timestamp_message_kind();
-        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
             let dt = DataType::Timestamp(unit, None);
             assert_eq!(
                 check_compatibility(&dt, &kind),
@@ -592,7 +612,12 @@ mod tests {
     #[test]
     fn compatible_duration_to_wellknown_duration() {
         let kind = duration_message_kind();
-        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
             let dt = DataType::Duration(unit);
             assert_eq!(
                 check_compatibility(&dt, &kind),
@@ -665,10 +690,7 @@ mod tests {
 
     #[test]
     fn dictionary_resolves_to_value_type() {
-        let dict = DataType::Dictionary(
-            Box::new(DataType::Int8),
-            Box::new(DataType::Utf8),
-        );
+        let dict = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
         assert_eq!(
             check_compatibility(&dict, &Kind::String),
             TypeCompatibility::Compatible,
@@ -677,10 +699,7 @@ mod tests {
 
     #[test]
     fn dictionary_utf8_to_enum() {
-        let dict = DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8),
-        );
+        let dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         assert_eq!(
             check_compatibility(&dict, &enum_kind()),
             TypeCompatibility::CoercionAvailable {
@@ -730,10 +749,7 @@ mod tests {
 
     #[test]
     fn resolve_dictionary_passthrough() {
-        let dict = DataType::Dictionary(
-            Box::new(DataType::Int8),
-            Box::new(DataType::Utf8),
-        );
+        let dict = DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
         let result = resolve_type_check(&dict, &Kind::String, false).unwrap();
         assert_eq!(result.mode, TypeCheckMode::Direct);
         // The resolved arrow_type should be Utf8, not Dictionary.

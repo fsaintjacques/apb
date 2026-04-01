@@ -148,7 +148,16 @@ fn main() {
             out,
             coerce,
             unknown_enum,
-        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, unknown_enum.into()),
+        } => run_transcode(
+            descriptor,
+            message,
+            query,
+            ipc,
+            out_format,
+            out,
+            coerce,
+            unknown_enum.into(),
+        ),
     };
 
     if let Err(e) = result {
@@ -175,7 +184,9 @@ fn open_input(
             input::open_duckdb(&q)
         }
         #[cfg(not(feature = "duckdb"))]
-        (Some(_), _) => Err("--query requires the 'duckdb' feature (build with --features duckdb)".into()),
+        (Some(_), _) => {
+            Err("--query requires the 'duckdb' feature (build with --features duckdb)".into())
+        }
         (_, Some(path)) => {
             debug!(path, "opening IPC input");
             input::open_ipc(&path)

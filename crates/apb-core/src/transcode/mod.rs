@@ -18,7 +18,7 @@ use arrow_buffer::{Buffer, OffsetBuffer};
 use crate::mapping::FieldMapping;
 use plan::{
     EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder, FieldEncoderKind, MapEncoder,
-    MessageEncoder, OneofEncoder, RepeatedEncoder,
+    MessageEncoder, OneofEncoder, OneofVariantEncoder, RepeatedEncoder,
 };
 
 /// Error during transcoding.
@@ -444,65 +444,76 @@ fn encode_oneof(
     struct_array: &StructArray,
     oneof_enc: &OneofEncoder,
 ) -> Result<(), TranscodeError> {
-    let mut set_variants = Vec::new();
+    // Find set variants without heap allocation.
+    let mut set_count = 0usize;
+    let mut first_set: Option<&OneofVariantEncoder> = None;
 
     for variant in &oneof_enc.variants {
         let child = struct_array.column(variant.arrow_child_index);
         if !child.is_null(row) {
-            set_variants.push(variant);
+            set_count += 1;
+            if first_set.is_none() {
+                first_set = Some(variant);
+            }
+            if set_count > 1 {
+                // Collect names only on error (rare path).
+                let set_names: Vec<String> = oneof_enc
+                    .variants
+                    .iter()
+                    .filter(|v| !struct_array.column(v.arrow_child_index).is_null(row))
+                    .map(|v| v.proto_name.clone())
+                    .collect();
+                return Err(TranscodeError::OneofMultipleSet {
+                    row,
+                    oneof_name: oneof_enc.oneof_name.clone(),
+                    set_variants: set_names,
+                });
+            }
         }
     }
 
-    match set_variants.len() {
-        0 => Ok(()),
-        1 => {
-            let variant = set_variants[0];
-            let child = struct_array.column(variant.arrow_child_index);
-            buf.extend_from_slice(&variant.tag);
-            match &*variant.kind {
-                FieldEncoderKind::Scalar(kind) => {
-                    kind.encode(child.as_ref(), row, buf).map_err(|e| {
-                        TranscodeError::FieldError {
-                            row,
-                            arrow_field: variant.proto_name.clone(),
-                            proto_field: variant.proto_name.clone(),
-                            reason: e.reason,
-                        }
-                    })?;
+    let Some(variant) = first_set else {
+        return Ok(());
+    };
+
+    let child = struct_array.column(variant.arrow_child_index);
+    buf.extend_from_slice(&variant.tag);
+    match &*variant.kind {
+        FieldEncoderKind::Scalar(kind) => {
+            kind.encode(child.as_ref(), row, buf).map_err(|e| {
+                TranscodeError::FieldError {
+                    row,
+                    arrow_field: variant.proto_name.clone(),
+                    proto_field: variant.proto_name.clone(),
+                    reason: e.reason,
                 }
-                FieldEncoderKind::EnumLookup(lookup) => {
-                    let wrote = encode_enum_lookup(
-                        buf,
-                        row,
-                        child.as_ref(),
-                        lookup,
-                        &variant.proto_name,
-                        &variant.proto_name,
-                    )?;
-                    if !wrote {
-                        // Undo the tag written before the match.
-                        let tag_len = variant.tag.len();
-                        buf.truncate(buf.len() - tag_len);
-                    }
-                }
-                FieldEncoderKind::Message(msg_enc) => {
-                    encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;
-                }
-                _ => {
-                    return Err(TranscodeError::FieldError {
-                        row,
-                        arrow_field: variant.proto_name.clone(),
-                        proto_field: variant.proto_name.clone(),
-                        reason: "unsupported oneof variant type".to_string(),
-                    });
-                }
-            }
-            Ok(())
+            })?;
         }
-        _ => Err(TranscodeError::OneofMultipleSet {
-            row,
-            oneof_name: oneof_enc.oneof_name.clone(),
-            set_variants: set_variants.iter().map(|v| v.proto_name.clone()).collect(),
-        }),
+        FieldEncoderKind::EnumLookup(lookup) => {
+            let wrote = encode_enum_lookup(
+                buf,
+                row,
+                child.as_ref(),
+                lookup,
+                &variant.proto_name,
+                &variant.proto_name,
+            )?;
+            if !wrote {
+                let tag_len = variant.tag.len();
+                buf.truncate(buf.len() - tag_len);
+            }
+        }
+        FieldEncoderKind::Message(msg_enc) => {
+            encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;
+        }
+        _ => {
+            return Err(TranscodeError::FieldError {
+                row,
+                arrow_field: variant.proto_name.clone(),
+                proto_field: variant.proto_name.clone(),
+                reason: "unsupported oneof variant type".to_string(),
+            });
+        }
     }
+    Ok(())
 }

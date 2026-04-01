@@ -172,7 +172,7 @@ fn validate_field(
     bound_indices: &mut HashSet<usize>,
     mapped: &mut Vec<MappedField>,
     type_errors: &mut Vec<FieldTypeError>,
-    structural_errors: &mut Vec<StructuralError>,
+    _structural_errors: &mut Vec<StructuralError>,
     nested_reports: &mut Vec<NestedReport>,
     unmapped_proto: &mut Vec<UnmappedProtoField>,
 ) {

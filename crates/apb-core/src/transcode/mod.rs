@@ -280,10 +280,9 @@ fn encode_nested_message_body(
         .map(|i| struct_array.column(i).clone())
         .collect();
 
-    let mut nested_buf = Vec::new();
-    encode_message_fields(&mut nested_buf, row, &child_columns, &msg_enc.sub_plan)?;
-
-    wire::encode_length_delimited(&nested_buf, buf);
+    let len_pos = wire::begin_length_delimited(buf);
+    encode_message_fields(buf, row, &child_columns, &msg_enc.sub_plan)?;
+    wire::finish_length_delimited(buf, len_pos);
 
     Ok(())
 }
@@ -316,22 +315,22 @@ fn encode_repeated(
 
     if rep_enc.packed {
         // Packed encoding: single length-delimited field with all values.
-        let mut packed_buf = Vec::new();
         let encode_fn = match &*rep_enc.element_kind {
             FieldEncoderKind::Scalar(f) => f,
             _ => unreachable!("packed encoding is only set for scalar elements"),
         };
+
+        buf.extend_from_slice(&rep_enc.packed_tag);
+        let len_pos = wire::begin_length_delimited(buf);
         for i in start..end {
-            encode_fn(values, i, &mut packed_buf).map_err(|e| TranscodeError::FieldError {
+            encode_fn(values, i, buf).map_err(|e| TranscodeError::FieldError {
                 row,
                 arrow_field: field_name.to_string(),
                 proto_field: format!("{}[{}]", field_name, i - start),
                 reason: e.reason,
             })?;
         }
-
-        buf.extend_from_slice(&rep_enc.packed_tag);
-        wire::encode_length_delimited(&packed_buf, buf);
+        wire::finish_length_delimited(buf, len_pos);
     } else {
         // Unpacked: each element gets its own tag.
         let element_tag = wire::encode_tag(rep_enc.field_number, rep_enc.element_wire_type);
@@ -387,19 +386,18 @@ fn encode_map(
     let values = map_array.values();
 
     for i in start..end {
-        let mut entry_buf = Vec::new();
+        buf.extend_from_slice(tag);
+        let len_pos = wire::begin_length_delimited(buf);
 
         // Key (field 1) — proto map keys are always scalars.
-        entry_buf.extend_from_slice(&map_enc.key_tag);
+        buf.extend_from_slice(&map_enc.key_tag);
         match &*map_enc.key_kind {
             FieldEncoderKind::Scalar(encode_fn) => {
-                encode_fn(keys.as_ref(), i, &mut entry_buf).map_err(|e| {
-                    TranscodeError::FieldError {
-                        row,
-                        arrow_field: format!("{field_name}[{}].key", i - start),
-                        proto_field: format!("{field_name}[{}].key", i - start),
-                        reason: e.reason,
-                    }
+                encode_fn(keys.as_ref(), i, buf).map_err(|e| TranscodeError::FieldError {
+                    row,
+                    arrow_field: format!("{field_name}[{}].key", i - start),
+                    proto_field: format!("{field_name}[{}].key", i - start),
+                    reason: e.reason,
                 })?;
             }
             _ => unreachable!("proto map keys must be scalar types"),
@@ -407,21 +405,18 @@ fn encode_map(
 
         // Value (field 2).
         if !values.is_null(i) {
-            entry_buf.extend_from_slice(&map_enc.value_tag);
+            buf.extend_from_slice(&map_enc.value_tag);
             match &*map_enc.value_kind {
                 FieldEncoderKind::Scalar(encode_fn) => {
-                    encode_fn(values.as_ref(), i, &mut entry_buf).map_err(|e| {
-                        TranscodeError::FieldError {
-                            row,
-                            arrow_field: format!("{field_name}[{}].value", i - start),
-                            proto_field: format!("{field_name}[{}].value", i - start),
-                            reason: e.reason,
-                        }
+                    encode_fn(values.as_ref(), i, buf).map_err(|e| TranscodeError::FieldError {
+                        row,
+                        arrow_field: format!("{field_name}[{}].value", i - start),
+                        proto_field: format!("{field_name}[{}].value", i - start),
+                        reason: e.reason,
                     })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
-                    // Tag already written above; just write the body.
-                    encode_nested_message_body(&mut entry_buf, i, values.as_ref(), msg_enc)?;
+                    encode_nested_message_body(buf, i, values.as_ref(), msg_enc)?;
                 }
                 _ => {
                     return Err(TranscodeError::FieldError {
@@ -434,8 +429,7 @@ fn encode_map(
             }
         }
 
-        buf.extend_from_slice(tag);
-        wire::encode_length_delimited(&entry_buf, buf);
+        wire::finish_length_delimited(buf, len_pos);
     }
 
     Ok(())

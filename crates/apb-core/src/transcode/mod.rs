@@ -277,12 +277,8 @@ fn encode_nested_message_body(
         .downcast_ref::<StructArray>()
         .expect("nested message column should be StructArray");
 
-    let child_columns: Vec<_> = (0..struct_array.num_columns())
-        .map(|i| struct_array.column(i).clone())
-        .collect();
-
     let len_pos = wire::begin_length_delimited(buf);
-    encode_message_fields(buf, row, &child_columns, &msg_enc.sub_plan)?;
+    encode_message_fields(buf, row, struct_array.columns(), &msg_enc.sub_plan)?;
     wire::finish_length_delimited(buf, len_pos);
 
     Ok(())

@@ -53,7 +53,7 @@ impl OutputWriter {
     pub fn write_batch(
         &mut self,
         batch: &RecordBatch,
-        transcoder: &mut Transcoder,
+        transcoder: &Transcoder,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::Delimited { writer } => {

@@ -270,7 +270,7 @@ fn run_transcode(
         warn!(unmapped_arrow, unmapped_proto, "some fields are unmapped");
     }
 
-    let mut transcoder = Transcoder::new(&mapping)?.with_unknown_enum(unknown_enum);
+    let transcoder = Transcoder::new(&mapping)?.with_unknown_enum(unknown_enum);
 
     let writer: Box<dyn io::Write> = match &out {
         Some(path) => {
@@ -290,7 +290,7 @@ fn run_transcode(
         total_rows += rows;
         total_batches += 1;
         debug!(batch = total_batches, rows, "transcoding batch");
-        output.write_batch(&batch, &mut transcoder)?;
+        output.write_batch(&batch, &transcoder)?;
     }
 
     output.finish()?;

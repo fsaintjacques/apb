@@ -78,7 +78,7 @@ fn roundtrip_bool() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -121,7 +121,7 @@ fn roundtrip_int32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -158,7 +158,7 @@ fn roundtrip_int64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -184,7 +184,7 @@ fn roundtrip_uint32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -210,7 +210,7 @@ fn roundtrip_uint64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -236,7 +236,7 @@ fn roundtrip_float32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -261,7 +261,7 @@ fn roundtrip_float64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -286,7 +286,7 @@ fn roundtrip_string() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -316,7 +316,7 @@ fn roundtrip_bytes() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -351,7 +351,7 @@ fn roundtrip_sint32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -386,7 +386,7 @@ fn roundtrip_sint64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -412,7 +412,7 @@ fn roundtrip_sfixed32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -438,7 +438,7 @@ fn roundtrip_sfixed64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -464,7 +464,7 @@ fn roundtrip_fixed32() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -490,7 +490,7 @@ fn roundtrip_fixed64() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -526,7 +526,7 @@ fn roundtrip_multiple_fields() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -576,7 +576,7 @@ fn null_fields_skipped() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -610,7 +610,7 @@ fn empty_batch() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -636,7 +636,7 @@ fn arrow_output_basic() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let result = transcoder.transcode_arrow(&batch).unwrap();
 
     assert_eq!(result.len(), 3);
@@ -666,7 +666,7 @@ fn arrow_output_empty_batch() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Scalars");
     let result = transcoder.transcode_arrow(&batch).unwrap();
     assert_eq!(result.len(), 0);
 }
@@ -693,7 +693,7 @@ fn coercion_int64_to_int32_valid() {
     )
     .unwrap();
 
-    let mut transcoder = Transcoder::new(&mapping).unwrap();
+    let transcoder = Transcoder::new(&mapping).unwrap();
 
     let batch = RecordBatch::try_new(
         Arc::new(arrow_schema),
@@ -734,7 +734,7 @@ fn coercion_int64_to_int32_overflow() {
     )
     .unwrap();
 
-    let mut transcoder = Transcoder::new(&mapping).unwrap();
+    let transcoder = Transcoder::new(&mapping).unwrap();
 
     let batch = RecordBatch::try_new(
         Arc::new(arrow_schema),
@@ -786,7 +786,7 @@ fn roundtrip_nested_message() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(struct_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -837,7 +837,7 @@ fn roundtrip_repeated_int32() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(list_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -922,7 +922,7 @@ fn roundtrip_repeated_message() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(list_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -983,7 +983,7 @@ fn roundtrip_map() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(map_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1024,7 +1024,7 @@ fn roundtrip_oneof_one_set() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(struct_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1078,7 +1078,7 @@ fn roundtrip_oneof_none_set() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(struct_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1114,7 +1114,7 @@ fn oneof_multiple_set_error() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(struct_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     let result = transcoder.transcode_delimited(&batch, &mut output);
     assert!(result.is_err());
@@ -1175,7 +1175,7 @@ fn roundtrip_mixed_batch() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1237,7 +1237,7 @@ fn arrow_output_nested() {
     let batch =
         RecordBatch::try_new(Arc::new(arrow_schema.clone()), vec![Arc::new(struct_array)]).unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Nested");
     let result = transcoder.transcode_arrow(&batch).unwrap();
 
     assert_eq!(result.len(), 2);
@@ -1289,7 +1289,7 @@ fn roundtrip_timestamp_microsecond() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1335,7 +1335,7 @@ fn roundtrip_timestamp_nanosecond_with_nanos() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1387,7 +1387,7 @@ fn roundtrip_timestamp_millisecond() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1435,7 +1435,7 @@ fn roundtrip_duration_microsecond() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1491,7 +1491,7 @@ fn roundtrip_timestamp_negative_pre_epoch() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1538,7 +1538,7 @@ fn roundtrip_timestamp_second() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1582,7 +1582,7 @@ fn roundtrip_duration_negative() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 
@@ -1632,7 +1632,7 @@ fn roundtrip_duration_nanosecond() {
     )
     .unwrap();
 
-    let mut transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.WithWellKnown");
     let mut output = Vec::new();
     transcoder.transcode_delimited(&batch, &mut output).unwrap();
 

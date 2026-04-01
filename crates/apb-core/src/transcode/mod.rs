@@ -48,8 +48,6 @@ pub enum TranscodeError {
 pub struct Transcoder {
     plan: EncodingPlan,
     unknown_enum: UnknownEnumBehavior,
-    /// Reusable scratch buffer for encoding individual messages.
-    msg_buf: Vec<u8>,
 }
 
 impl Transcoder {
@@ -60,7 +58,6 @@ impl Transcoder {
         Ok(Self {
             plan,
             unknown_enum: UnknownEnumBehavior::default(),
-            msg_buf: Vec::with_capacity(256),
         })
     }
 
@@ -83,23 +80,21 @@ impl Transcoder {
 
     /// Transcode a batch into varint-delimited protobuf messages.
     pub fn transcode_delimited(
-        &mut self,
+        &self,
         batch: &RecordBatch,
         output: &mut Vec<u8>,
     ) -> Result<(), TranscodeError> {
         for row in 0..batch.num_rows() {
-            self.msg_buf.clear();
-            encode_message_fields(&mut self.msg_buf, row, batch.columns(), &self.plan)?;
-
-            wire::encode_varint(self.msg_buf.len() as u64, output);
-            output.extend_from_slice(&self.msg_buf);
+            let len_pos = wire::begin_length_delimited(output);
+            encode_message_fields(output, row, batch.columns(), &self.plan)?;
+            wire::finish_length_delimited(output, len_pos);
         }
 
         Ok(())
     }
 
     /// Transcode a batch into an Arrow `BinaryArray`.
-    pub fn transcode_arrow(&mut self, batch: &RecordBatch) -> Result<BinaryArray, TranscodeError> {
+    pub fn transcode_arrow(&self, batch: &RecordBatch) -> Result<BinaryArray, TranscodeError> {
         let num_rows = batch.num_rows();
         let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
         let mut payload: Vec<u8> = Vec::new();
@@ -107,10 +102,8 @@ impl Transcoder {
         offsets.push(0);
 
         for row in 0..num_rows {
-            self.msg_buf.clear();
-            encode_message_fields(&mut self.msg_buf, row, batch.columns(), &self.plan)?;
+            encode_message_fields(&mut payload, row, batch.columns(), &self.plan)?;
 
-            payload.extend_from_slice(&self.msg_buf);
             if payload.len() > i32::MAX as usize {
                 return Err(TranscodeError::FieldError {
                     row,

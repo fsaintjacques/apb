@@ -1,7 +1,7 @@
 # apb
 
-Arrow to Protobuf transcoder. Converts columnar Arrow data into row-wise
-protobuf messages using dynamic binary descriptors.
+Arrow to Protobuf transcoder library and cli. Converts columnar Arrow data
+into row-wise protobuf messages using dynamic binary descriptors.
 
 ## Quick start
 
@@ -14,6 +14,22 @@ cargo build -p apb-cli --release --features duckdb
 
 # Build with bundled DuckDB (no system install needed)
 cargo build -p apb-cli --release --features duckdb-bundled
+```
+
+## Library usage
+
+```rust
+use apb_core::descriptor::ProtoSchema;
+use apb_core::mapping::{infer_mapping, InferOptions};
+use apb_core::transcode::Transcoder;
+
+let schema = ProtoSchema::from_bytes(&descriptor_bytes)?;
+let msg = schema.message("mypackage.MyMessage")?;
+let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default())?;
+let transcoder = Transcoder::new(&mapping)?;
+
+let mut output = Vec::new();
+transcoder.transcode_delimited(&batch, &mut output)?;
 ```
 
 ## Usage
@@ -99,21 +115,6 @@ All proto scalar types, nested messages (arbitrary depth), repeated fields
 (packed for numerics), map fields, oneof groups, enums (int32 and string),
 `google.protobuf.Timestamp`, and `google.protobuf.Duration`.
 
-## Library usage
-
-```rust
-use apb_core::descriptor::ProtoSchema;
-use apb_core::mapping::{infer_mapping, InferOptions};
-use apb_core::transcode::Transcoder;
-
-let schema = ProtoSchema::from_bytes(&descriptor_bytes)?;
-let msg = schema.message("mypackage.MyMessage")?;
-let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default())?;
-let transcoder = Transcoder::new(&mapping)?;
-
-let mut output = Vec::new();
-transcoder.transcode_delimited(&batch, &mut output)?;
-```
 
 ## Architecture
 

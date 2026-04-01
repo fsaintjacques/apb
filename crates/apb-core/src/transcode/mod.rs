@@ -165,14 +165,15 @@ fn encode_field(
     encoder: &FieldEncoder,
 ) -> Result<(), TranscodeError> {
     match &encoder.kind {
-        FieldEncoderKind::Scalar(encode_fn) => {
+        FieldEncoderKind::Scalar(kind) => {
             buf.extend_from_slice(&encoder.tag);
-            encode_fn(array, row, buf).map_err(|e| TranscodeError::FieldError {
-                row,
-                arrow_field: encoder.arrow_name.clone(),
-                proto_field: encoder.proto_name.clone(),
-                reason: e.reason,
-            })?;
+            kind.encode(array, row, buf)
+                .map_err(|e| TranscodeError::FieldError {
+                    row,
+                    arrow_field: encoder.arrow_name.clone(),
+                    proto_field: encoder.proto_name.clone(),
+                    reason: e.reason,
+                })?;
         }
         FieldEncoderKind::EnumLookup(lookup) => {
             let before = buf.len();
@@ -315,20 +316,21 @@ fn encode_repeated(
 
     if rep_enc.packed {
         // Packed encoding: single length-delimited field with all values.
-        let encode_fn = match &*rep_enc.element_kind {
-            FieldEncoderKind::Scalar(f) => f,
+        let kind = match &*rep_enc.element_kind {
+            FieldEncoderKind::Scalar(k) => k,
             _ => unreachable!("packed encoding is only set for scalar elements"),
         };
 
         buf.extend_from_slice(&rep_enc.packed_tag);
         let len_pos = wire::begin_length_delimited(buf);
         for i in start..end {
-            encode_fn(values, i, buf).map_err(|e| TranscodeError::FieldError {
-                row,
-                arrow_field: field_name.to_string(),
-                proto_field: format!("{}[{}]", field_name, i - start),
-                reason: e.reason,
-            })?;
+            kind.encode(values, i, buf)
+                .map_err(|e| TranscodeError::FieldError {
+                    row,
+                    arrow_field: field_name.to_string(),
+                    proto_field: format!("{}[{}]", field_name, i - start),
+                    reason: e.reason,
+                })?;
         }
         wire::finish_length_delimited(buf, len_pos);
     } else {
@@ -336,14 +338,15 @@ fn encode_repeated(
         let element_tag = wire::encode_tag(rep_enc.field_number, rep_enc.element_wire_type);
         for i in start..end {
             match &*rep_enc.element_kind {
-                FieldEncoderKind::Scalar(encode_fn) => {
+                FieldEncoderKind::Scalar(kind) => {
                     buf.extend_from_slice(&element_tag);
-                    encode_fn(values, i, buf).map_err(|e| TranscodeError::FieldError {
-                        row,
-                        arrow_field: field_name.to_string(),
-                        proto_field: format!("{}[{}]", field_name, i - start),
-                        reason: e.reason,
-                    })?;
+                    kind.encode(values, i, buf)
+                        .map_err(|e| TranscodeError::FieldError {
+                            row,
+                            arrow_field: field_name.to_string(),
+                            proto_field: format!("{}[{}]", field_name, i - start),
+                            reason: e.reason,
+                        })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
                     buf.extend_from_slice(&element_tag);
@@ -392,13 +395,14 @@ fn encode_map(
         // Key (field 1) — proto map keys are always scalars.
         buf.extend_from_slice(&map_enc.key_tag);
         match &*map_enc.key_kind {
-            FieldEncoderKind::Scalar(encode_fn) => {
-                encode_fn(keys.as_ref(), i, buf).map_err(|e| TranscodeError::FieldError {
-                    row,
-                    arrow_field: format!("{field_name}[{}].key", i - start),
-                    proto_field: format!("{field_name}[{}].key", i - start),
-                    reason: e.reason,
-                })?;
+            FieldEncoderKind::Scalar(kind) => {
+                kind.encode(keys.as_ref(), i, buf)
+                    .map_err(|e| TranscodeError::FieldError {
+                        row,
+                        arrow_field: format!("{field_name}[{}].key", i - start),
+                        proto_field: format!("{field_name}[{}].key", i - start),
+                        reason: e.reason,
+                    })?;
             }
             _ => unreachable!("proto map keys must be scalar types"),
         }
@@ -407,12 +411,14 @@ fn encode_map(
         if !values.is_null(i) {
             buf.extend_from_slice(&map_enc.value_tag);
             match &*map_enc.value_kind {
-                FieldEncoderKind::Scalar(encode_fn) => {
-                    encode_fn(values.as_ref(), i, buf).map_err(|e| TranscodeError::FieldError {
-                        row,
-                        arrow_field: format!("{field_name}[{}].value", i - start),
-                        proto_field: format!("{field_name}[{}].value", i - start),
-                        reason: e.reason,
+                FieldEncoderKind::Scalar(kind) => {
+                    kind.encode(values.as_ref(), i, buf).map_err(|e| {
+                        TranscodeError::FieldError {
+                            row,
+                            arrow_field: format!("{field_name}[{}].value", i - start),
+                            proto_field: format!("{field_name}[{}].value", i - start),
+                            reason: e.reason,
+                        }
                     })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
@@ -458,8 +464,8 @@ fn encode_oneof(
             let child = struct_array.column(variant.arrow_child_index);
             buf.extend_from_slice(&variant.tag);
             match &*variant.kind {
-                FieldEncoderKind::Scalar(encode_fn) => {
-                    encode_fn(child.as_ref(), row, buf).map_err(|e| {
+                FieldEncoderKind::Scalar(kind) => {
+                    kind.encode(child.as_ref(), row, buf).map_err(|e| {
                         TranscodeError::FieldError {
                             row,
                             arrow_field: variant.proto_name.clone(),

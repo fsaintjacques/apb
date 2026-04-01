@@ -17,10 +17,111 @@ pub struct EncodeError {
     pub reason: String,
 }
 
-/// Function type for scalar encoding.
-/// Takes: array, row index, output buffer.
-pub type ScalarEncodeFn =
-    fn(array: &dyn arrow_array::Array, row: usize, buf: &mut Vec<u8>) -> Result<(), EncodeError>;
+/// Enum identifying which scalar encoding to apply.
+/// Replaces function pointers to enable inlining in the hot loop.
+#[derive(Debug, Clone, Copy)]
+pub enum ScalarKind {
+    // Direct
+    Bool,
+    Int32Varint,
+    Int32Zigzag,
+    Int32Fixed,
+    Int64Varint,
+    Int64Zigzag,
+    Int64Fixed,
+    UInt32Varint,
+    UInt32Fixed,
+    UInt64Varint,
+    UInt64Fixed,
+    Float32,
+    Float64,
+    Utf8,
+    LargeUtf8,
+    Binary,
+    LargeBinary,
+    Int32AsEnum,
+    // Timestamps
+    TimestampS,
+    TimestampMs,
+    TimestampUs,
+    TimestampNs,
+    // Durations
+    DurationS,
+    DurationMs,
+    DurationUs,
+    DurationNs,
+    // Coercions
+    Int64AsInt32Varint,
+    Int64AsSint32,
+    Int64AsSfixed32,
+    Int32AsInt64Varint,
+    Int32AsSint64,
+    Int32AsSfixed64,
+    UInt64AsUInt32Varint,
+    UInt64AsFixed32,
+    UInt32AsUInt64Varint,
+    UInt32AsFixed64,
+    Float64AsFloat32,
+    Float32AsFloat64,
+    Utf8AsBytes,
+    BinaryAsString,
+    Int64AsEnum,
+}
+
+impl ScalarKind {
+    /// Encode a scalar value at `row` from `array` into `buf`.
+    #[inline]
+    pub fn encode(
+        self,
+        array: &dyn arrow_array::Array,
+        row: usize,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        match self {
+            Self::Bool => encode_bool(array, row, buf),
+            Self::Int32Varint => encode_int32_varint(array, row, buf),
+            Self::Int32Zigzag => encode_int32_zigzag(array, row, buf),
+            Self::Int32Fixed => encode_int32_fixed(array, row, buf),
+            Self::Int64Varint => encode_int64_varint(array, row, buf),
+            Self::Int64Zigzag => encode_int64_zigzag(array, row, buf),
+            Self::Int64Fixed => encode_int64_fixed(array, row, buf),
+            Self::UInt32Varint => encode_uint32_varint(array, row, buf),
+            Self::UInt32Fixed => encode_uint32_fixed(array, row, buf),
+            Self::UInt64Varint => encode_uint64_varint(array, row, buf),
+            Self::UInt64Fixed => encode_uint64_fixed(array, row, buf),
+            Self::Float32 => encode_float32(array, row, buf),
+            Self::Float64 => encode_float64(array, row, buf),
+            Self::Utf8 => encode_utf8(array, row, buf),
+            Self::LargeUtf8 => encode_large_utf8(array, row, buf),
+            Self::Binary => encode_binary(array, row, buf),
+            Self::LargeBinary => encode_large_binary(array, row, buf),
+            Self::Int32AsEnum => encode_int32_as_enum(array, row, buf),
+            Self::TimestampS => encode_timestamp_s(array, row, buf),
+            Self::TimestampMs => encode_timestamp_ms(array, row, buf),
+            Self::TimestampUs => encode_timestamp_us(array, row, buf),
+            Self::TimestampNs => encode_timestamp_ns(array, row, buf),
+            Self::DurationS => encode_duration_s(array, row, buf),
+            Self::DurationMs => encode_duration_ms(array, row, buf),
+            Self::DurationUs => encode_duration_us(array, row, buf),
+            Self::DurationNs => encode_duration_ns(array, row, buf),
+            Self::Int64AsInt32Varint => encode_int64_as_int32_varint(array, row, buf),
+            Self::Int64AsSint32 => encode_int64_as_sint32(array, row, buf),
+            Self::Int64AsSfixed32 => encode_int64_as_sfixed32(array, row, buf),
+            Self::Int32AsInt64Varint => encode_int32_as_int64_varint(array, row, buf),
+            Self::Int32AsSint64 => encode_int32_as_sint64(array, row, buf),
+            Self::Int32AsSfixed64 => encode_int32_as_sfixed64(array, row, buf),
+            Self::UInt64AsUInt32Varint => encode_uint64_as_uint32_varint(array, row, buf),
+            Self::UInt64AsFixed32 => encode_uint64_as_fixed32(array, row, buf),
+            Self::UInt32AsUInt64Varint => encode_uint32_as_uint64_varint(array, row, buf),
+            Self::UInt32AsFixed64 => encode_uint32_as_fixed64(array, row, buf),
+            Self::Float64AsFloat32 => encode_float64_as_float32(array, row, buf),
+            Self::Float32AsFloat64 => encode_float32_as_float64(array, row, buf),
+            Self::Utf8AsBytes => encode_utf8_as_bytes(array, row, buf),
+            Self::BinaryAsString => encode_binary_as_string(array, row, buf),
+            Self::Int64AsEnum => encode_int64_as_int32_varint(array, row, buf),
+        }
+    }
+}
 
 // === Boolean ===
 

@@ -6,7 +6,7 @@ use prost_reflect::Kind;
 use crate::mapping::{FieldBinding, FieldMapping, FieldShape, OneofMapping};
 use crate::types::TypeCheckMode;
 
-use super::encode::{self, ScalarEncodeFn};
+use super::encode::ScalarKind;
 use super::wire;
 
 /// A precomputed encoding plan for a message.
@@ -51,8 +51,8 @@ pub struct FieldEncoder {
 
 /// The kind of encoder for a field.
 pub enum FieldEncoderKind {
-    /// Scalar field — function pointer.
-    Scalar(ScalarEncodeFn),
+    /// Scalar field — encoding kind.
+    Scalar(ScalarKind),
     /// String → enum lookup (name → number).
     EnumLookup(EnumLookupEncoder),
     /// Nested message — sub-plan for the struct's children.
@@ -359,179 +359,170 @@ fn scalar_wire_type(
     Ok(wt)
 }
 
-/// Select the encoder function and wire type for a scalar field.
+/// Select the encoder kind and wire type for a scalar field.
 fn select_scalar_encoder(
     arrow_type: &DataType,
     proto_kind: &Kind,
     mode: &TypeCheckMode,
-) -> Result<(ScalarEncodeFn, u8), PlanError> {
+) -> Result<(ScalarKind, u8), PlanError> {
     use DataType::*;
 
-    let result: (ScalarEncodeFn, u8) = match (arrow_type, proto_kind, mode) {
+    let result: (ScalarKind, u8) = match (arrow_type, proto_kind, mode) {
         // === Direct lossless ===
-        (Boolean, Kind::Bool, TypeCheckMode::Direct) => (encode::encode_bool, wire::WIRE_VARINT),
+        (Boolean, Kind::Bool, TypeCheckMode::Direct) => (ScalarKind::Bool, wire::WIRE_VARINT),
 
-        (Int32, Kind::Int32, TypeCheckMode::Direct) => {
-            (encode::encode_int32_varint, wire::WIRE_VARINT)
-        }
+        (Int32, Kind::Int32, TypeCheckMode::Direct) => (ScalarKind::Int32Varint, wire::WIRE_VARINT),
         (Int32, Kind::Sint32, TypeCheckMode::Direct) => {
-            (encode::encode_int32_zigzag, wire::WIRE_VARINT)
+            (ScalarKind::Int32Zigzag, wire::WIRE_VARINT)
         }
         (Int32, Kind::Sfixed32, TypeCheckMode::Direct) => {
-            (encode::encode_int32_fixed, wire::WIRE_FIXED32)
+            (ScalarKind::Int32Fixed, wire::WIRE_FIXED32)
         }
 
-        (Int64, Kind::Int64, TypeCheckMode::Direct) => {
-            (encode::encode_int64_varint, wire::WIRE_VARINT)
-        }
+        (Int64, Kind::Int64, TypeCheckMode::Direct) => (ScalarKind::Int64Varint, wire::WIRE_VARINT),
         (Int64, Kind::Sint64, TypeCheckMode::Direct) => {
-            (encode::encode_int64_zigzag, wire::WIRE_VARINT)
+            (ScalarKind::Int64Zigzag, wire::WIRE_VARINT)
         }
         (Int64, Kind::Sfixed64, TypeCheckMode::Direct) => {
-            (encode::encode_int64_fixed, wire::WIRE_FIXED64)
+            (ScalarKind::Int64Fixed, wire::WIRE_FIXED64)
         }
 
         (UInt32, Kind::Uint32, TypeCheckMode::Direct) => {
-            (encode::encode_uint32_varint, wire::WIRE_VARINT)
+            (ScalarKind::UInt32Varint, wire::WIRE_VARINT)
         }
         (UInt32, Kind::Fixed32, TypeCheckMode::Direct) => {
-            (encode::encode_uint32_fixed, wire::WIRE_FIXED32)
+            (ScalarKind::UInt32Fixed, wire::WIRE_FIXED32)
         }
 
         (UInt64, Kind::Uint64, TypeCheckMode::Direct) => {
-            (encode::encode_uint64_varint, wire::WIRE_VARINT)
+            (ScalarKind::UInt64Varint, wire::WIRE_VARINT)
         }
         (UInt64, Kind::Fixed64, TypeCheckMode::Direct) => {
-            (encode::encode_uint64_fixed, wire::WIRE_FIXED64)
+            (ScalarKind::UInt64Fixed, wire::WIRE_FIXED64)
         }
 
-        (Float32, Kind::Float, TypeCheckMode::Direct) => {
-            (encode::encode_float32, wire::WIRE_FIXED32)
-        }
-        (Float64, Kind::Double, TypeCheckMode::Direct) => {
-            (encode::encode_float64, wire::WIRE_FIXED64)
-        }
+        (Float32, Kind::Float, TypeCheckMode::Direct) => (ScalarKind::Float32, wire::WIRE_FIXED32),
+        (Float64, Kind::Double, TypeCheckMode::Direct) => (ScalarKind::Float64, wire::WIRE_FIXED64),
 
         (Utf8, Kind::String, TypeCheckMode::Direct) => {
-            (encode::encode_utf8, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::Utf8, wire::WIRE_LENGTH_DELIMITED)
         }
         (LargeUtf8, Kind::String, TypeCheckMode::Direct) => {
-            (encode::encode_large_utf8, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::LargeUtf8, wire::WIRE_LENGTH_DELIMITED)
         }
         (Binary, Kind::Bytes, TypeCheckMode::Direct) => {
-            (encode::encode_binary, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::Binary, wire::WIRE_LENGTH_DELIMITED)
         }
         (LargeBinary, Kind::Bytes, TypeCheckMode::Direct) => {
-            (encode::encode_large_binary, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::LargeBinary, wire::WIRE_LENGTH_DELIMITED)
         }
 
         // Int32 → enum
         (Int32, Kind::Enum(_), TypeCheckMode::Direct) => {
-            (encode::encode_int32_as_enum, wire::WIRE_VARINT)
+            (ScalarKind::Int32AsEnum, wire::WIRE_VARINT)
         }
 
         // === Well-known types (Arrow scalar → proto message) ===
-        // These are length-delimited because they encode as proto messages.
         (
             Timestamp(arrow_schema::TimeUnit::Second, _),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Timestamp" => {
-            (encode::encode_timestamp_s, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::TimestampS, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Timestamp(arrow_schema::TimeUnit::Millisecond, _),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Timestamp" => {
-            (encode::encode_timestamp_ms, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::TimestampMs, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Timestamp(arrow_schema::TimeUnit::Microsecond, _),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Timestamp" => {
-            (encode::encode_timestamp_us, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::TimestampUs, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Timestamp(arrow_schema::TimeUnit::Nanosecond, _),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Timestamp" => {
-            (encode::encode_timestamp_ns, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::TimestampNs, wire::WIRE_LENGTH_DELIMITED)
         }
         (Duration(arrow_schema::TimeUnit::Second), Kind::Message(desc), TypeCheckMode::Direct)
             if desc.full_name() == "google.protobuf.Duration" =>
         {
-            (encode::encode_duration_s, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::DurationS, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Duration(arrow_schema::TimeUnit::Millisecond),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Duration" => {
-            (encode::encode_duration_ms, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::DurationMs, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Duration(arrow_schema::TimeUnit::Microsecond),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Duration" => {
-            (encode::encode_duration_us, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::DurationUs, wire::WIRE_LENGTH_DELIMITED)
         }
         (
             Duration(arrow_schema::TimeUnit::Nanosecond),
             Kind::Message(desc),
             TypeCheckMode::Direct,
         ) if desc.full_name() == "google.protobuf.Duration" => {
-            (encode::encode_duration_ns, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::DurationNs, wire::WIRE_LENGTH_DELIMITED)
         }
 
         // === Coercions ===
         (Int64, Kind::Int32, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int64_as_int32_varint, wire::WIRE_VARINT)
+            (ScalarKind::Int64AsInt32Varint, wire::WIRE_VARINT)
         }
         (Int64, Kind::Sint32, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int64_as_sint32, wire::WIRE_VARINT)
+            (ScalarKind::Int64AsSint32, wire::WIRE_VARINT)
         }
         (Int64, Kind::Sfixed32, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int64_as_sfixed32, wire::WIRE_FIXED32)
+            (ScalarKind::Int64AsSfixed32, wire::WIRE_FIXED32)
         }
         (Int32, Kind::Int64, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int32_as_int64_varint, wire::WIRE_VARINT)
+            (ScalarKind::Int32AsInt64Varint, wire::WIRE_VARINT)
         }
         (Int32, Kind::Sint64, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int32_as_sint64, wire::WIRE_VARINT)
+            (ScalarKind::Int32AsSint64, wire::WIRE_VARINT)
         }
         (Int32, Kind::Sfixed64, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int32_as_sfixed64, wire::WIRE_FIXED64)
+            (ScalarKind::Int32AsSfixed64, wire::WIRE_FIXED64)
         }
         (UInt64, Kind::Uint32, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_uint64_as_uint32_varint, wire::WIRE_VARINT)
+            (ScalarKind::UInt64AsUInt32Varint, wire::WIRE_VARINT)
         }
         (UInt64, Kind::Fixed32, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_uint64_as_fixed32, wire::WIRE_FIXED32)
+            (ScalarKind::UInt64AsFixed32, wire::WIRE_FIXED32)
         }
         (UInt32, Kind::Uint64, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_uint32_as_uint64_varint, wire::WIRE_VARINT)
+            (ScalarKind::UInt32AsUInt64Varint, wire::WIRE_VARINT)
         }
         (UInt32, Kind::Fixed64, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_uint32_as_fixed64, wire::WIRE_FIXED64)
+            (ScalarKind::UInt32AsFixed64, wire::WIRE_FIXED64)
         }
         (Float64, Kind::Float, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_float64_as_float32, wire::WIRE_FIXED32)
+            (ScalarKind::Float64AsFloat32, wire::WIRE_FIXED32)
         }
         (Float32, Kind::Double, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_float32_as_float64, wire::WIRE_FIXED64)
+            (ScalarKind::Float32AsFloat64, wire::WIRE_FIXED64)
         }
         (Utf8 | LargeUtf8, Kind::Bytes, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_utf8_as_bytes, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::Utf8AsBytes, wire::WIRE_LENGTH_DELIMITED)
         }
         (Binary | LargeBinary, Kind::String, TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_binary_as_string, wire::WIRE_LENGTH_DELIMITED)
+            (ScalarKind::BinaryAsString, wire::WIRE_LENGTH_DELIMITED)
         }
         (Int64, Kind::Enum(_), TypeCheckMode::Coerce { .. }) => {
-            (encode::encode_int64_as_int32_varint, wire::WIRE_VARINT)
+            (ScalarKind::Int64AsEnum, wire::WIRE_VARINT)
         }
 
         _ => {

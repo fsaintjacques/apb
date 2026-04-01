@@ -48,6 +48,8 @@ pub enum TranscodeError {
 pub struct Transcoder {
     plan: EncodingPlan,
     unknown_enum: UnknownEnumBehavior,
+    /// Reusable scratch buffer for encoding individual messages.
+    msg_buf: Vec<u8>,
 }
 
 impl Transcoder {
@@ -58,6 +60,7 @@ impl Transcoder {
         Ok(Self {
             plan,
             unknown_enum: UnknownEnumBehavior::default(),
+            msg_buf: Vec::with_capacity(256),
         })
     }
 
@@ -80,37 +83,34 @@ impl Transcoder {
 
     /// Transcode a batch into varint-delimited protobuf messages.
     pub fn transcode_delimited(
-        &self,
+        &mut self,
         batch: &RecordBatch,
         output: &mut Vec<u8>,
     ) -> Result<(), TranscodeError> {
-        let mut msg_buf = Vec::with_capacity(256);
-
         for row in 0..batch.num_rows() {
-            msg_buf.clear();
-            encode_message_fields(&mut msg_buf, row, batch.columns(), &self.plan)?;
+            self.msg_buf.clear();
+            encode_message_fields(&mut self.msg_buf, row, batch.columns(), &self.plan)?;
 
-            wire::encode_varint(msg_buf.len() as u64, output);
-            output.extend_from_slice(&msg_buf);
+            wire::encode_varint(self.msg_buf.len() as u64, output);
+            output.extend_from_slice(&self.msg_buf);
         }
 
         Ok(())
     }
 
     /// Transcode a batch into an Arrow `BinaryArray`.
-    pub fn transcode_arrow(&self, batch: &RecordBatch) -> Result<BinaryArray, TranscodeError> {
+    pub fn transcode_arrow(&mut self, batch: &RecordBatch) -> Result<BinaryArray, TranscodeError> {
         let num_rows = batch.num_rows();
-        let mut msg_buf = Vec::with_capacity(256);
         let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
         let mut payload: Vec<u8> = Vec::new();
 
         offsets.push(0);
 
         for row in 0..num_rows {
-            msg_buf.clear();
-            encode_message_fields(&mut msg_buf, row, batch.columns(), &self.plan)?;
+            self.msg_buf.clear();
+            encode_message_fields(&mut self.msg_buf, row, batch.columns(), &self.plan)?;
 
-            payload.extend_from_slice(&msg_buf);
+            payload.extend_from_slice(&self.msg_buf);
             if payload.len() > i32::MAX as usize {
                 return Err(TranscodeError::FieldError {
                     row,

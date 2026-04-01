@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package fixtures;
+
+enum Color {
+  COLOR_UNKNOWN = 0;
+  COLOR_RED = 1;
+  COLOR_GREEN = 2;
+  COLOR_BLUE = 3;
+}
+
+enum Size {
+  SIZE_UNKNOWN = 0;
+  SIZE_SMALL = 1;
+  SIZE_MEDIUM = 2;
+  SIZE_LARGE = 3;
+}
+
+message Product {
+  string name = 1;
+  Color color = 2;
+  Size size = 3;
+  int32 quantity = 4;
+}

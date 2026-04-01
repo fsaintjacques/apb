@@ -160,7 +160,7 @@ fn validate_strict_unmapped_proto() {
         Field::new("bool_field", DataType::Boolean, false),
     ]);
 
-    let options = InferOptions {
+    let options = InferOptions { coerce_all: false,
         allow_unmapped_proto: false,
         allow_unmapped_arrow: true,
     };
@@ -182,7 +182,7 @@ fn validate_strict_unmapped_arrow() {
         Field::new("extra", DataType::Utf8, false),
     ]);
 
-    let options = InferOptions {
+    let options = InferOptions { coerce_all: false,
         allow_unmapped_proto: true,
         allow_unmapped_arrow: false,
     };

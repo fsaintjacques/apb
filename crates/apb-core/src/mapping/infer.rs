@@ -13,6 +13,9 @@ pub struct InferOptions {
     pub allow_unmapped_proto: bool,
     /// If true, unmapped Arrow fields are allowed (default: true).
     pub allow_unmapped_arrow: bool,
+    /// If true, allow type coercions globally (default: false).
+    /// Overrides per-field annotation — all fields get coercion enabled.
+    pub coerce_all: bool,
 }
 
 impl Default for InferOptions {
@@ -20,6 +23,7 @@ impl Default for InferOptions {
         Self {
             allow_unmapped_proto: true,
             allow_unmapped_arrow: true,
+            coerce_all: false,
         }
     }
 }
@@ -174,7 +178,8 @@ fn infer_field(
     bound_indices: &mut HashSet<usize>,
     options: &InferOptions,
 ) -> Result<Option<FieldBinding>, MappingError> {
-    let (annotation_name, coerce) = read_apb_annotations(proto_field);
+    let (annotation_name, field_coerce) = read_apb_annotations(proto_field);
+    let coerce = field_coerce || options.coerce_all;
 
     // Step 1: find the Arrow field — annotation takes priority over name-match.
     let (arrow_index, arrow_field, bind_method) =

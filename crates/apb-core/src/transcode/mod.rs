@@ -6,11 +6,11 @@ pub mod wire;
 
 pub use plan::PlanError;
 
-use arrow_array::{Array, BinaryArray, ListArray, LargeListArray, MapArray, RecordBatch, StructArray};
+use arrow_array::{Array, BinaryArray, LargeStringArray, ListArray, LargeListArray, MapArray, RecordBatch, StringArray, StructArray};
 use arrow_buffer::{Buffer, OffsetBuffer};
 
 use crate::mapping::FieldMapping;
-use plan::{EncoderEntry, EncodingPlan, FieldEncoder, FieldEncoderKind, MapEncoder, MessageEncoder, OneofEncoder, RepeatedEncoder};
+use plan::{EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder, FieldEncoderKind, MapEncoder, MessageEncoder, OneofEncoder, RepeatedEncoder};
 
 /// Error during transcoding.
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +146,10 @@ fn encode_field(
                 reason: e.reason,
             })?;
         }
+        FieldEncoderKind::EnumLookup(lookup) => {
+            buf.extend_from_slice(&encoder.tag);
+            encode_enum_lookup(buf, row, array, lookup, &encoder.arrow_name, &encoder.proto_name)?;
+        }
         FieldEncoderKind::Message(msg_enc) => {
             buf.extend_from_slice(&encoder.tag);
             encode_nested_message_body(buf, row, array, msg_enc)?;
@@ -157,6 +161,45 @@ fn encode_field(
             encode_map(buf, row, array, &encoder.tag, map_enc, &encoder.proto_name)?;
         }
     }
+    Ok(())
+}
+
+/// Encode a string value as a proto enum via name lookup.
+fn encode_enum_lookup(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    lookup: &EnumLookupEncoder,
+    arrow_name: &str,
+    proto_name: &str,
+) -> Result<(), TranscodeError> {
+    let value = if let Some(arr) = array.as_any().downcast_ref::<StringArray>() {
+        arr.value(row)
+    } else if let Some(arr) = array.as_any().downcast_ref::<LargeStringArray>() {
+        arr.value(row)
+    } else {
+        return Err(TranscodeError::FieldError {
+            row,
+            arrow_field: arrow_name.to_string(),
+            proto_field: proto_name.to_string(),
+            reason: "expected Utf8 or LargeUtf8 for enum lookup".to_string(),
+        });
+    };
+
+    let number = lookup.name_to_number.get(value).ok_or_else(|| {
+        let valid: Vec<_> = lookup.name_to_number.keys().collect();
+        TranscodeError::FieldError {
+            row,
+            arrow_field: arrow_name.to_string(),
+            proto_field: proto_name.to_string(),
+            reason: format!(
+                "unknown enum variant '{}' for {}. Valid: {:?}",
+                value, lookup.enum_name, valid,
+            ),
+        }
+    })?;
+
+    wire::encode_varint(*number as u32 as u64, buf);
     Ok(())
 }
 
@@ -366,8 +409,10 @@ fn encode_oneof(
                         reason: e.reason,
                     })?;
                 }
+                FieldEncoderKind::EnumLookup(lookup) => {
+                    encode_enum_lookup(buf, row, child.as_ref(), lookup, &variant.proto_name, &variant.proto_name)?;
+                }
                 FieldEncoderKind::Message(msg_enc) => {
-                    // Tag already written above; just write the body.
                     encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;
                 }
                 _ => {

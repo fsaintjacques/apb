@@ -53,12 +53,22 @@ pub struct FieldEncoder {
 pub enum FieldEncoderKind {
     /// Scalar field — function pointer.
     Scalar(ScalarEncodeFn),
+    /// String → enum lookup (name → number).
+    EnumLookup(EnumLookupEncoder),
     /// Nested message — sub-plan for the struct's children.
     Message(MessageEncoder),
     /// Repeated field (list).
     Repeated(RepeatedEncoder),
     /// Map field.
     Map(MapEncoder),
+}
+
+/// Encodes a Utf8 Arrow column as a proto enum field via name lookup.
+pub struct EnumLookupEncoder {
+    /// Map from enum variant name to number.
+    pub name_to_number: std::collections::HashMap<String, i32>,
+    /// Enum name (for error messages).
+    pub enum_name: String,
 }
 
 /// Encodes a StructArray as a nested proto message.
@@ -175,6 +185,26 @@ fn build_encoder_kind(
 ) -> Result<(FieldEncoderKind, Vec<u8>), PlanError> {
     match shape {
         FieldShape::Scalar => {
+            // Special case: Utf8 → enum via name lookup.
+            if matches!((arrow_type, proto_kind, mode),
+                (DataType::Utf8 | DataType::LargeUtf8, Kind::Enum(_), TypeCheckMode::Coerce { .. }))
+            {
+                if let Kind::Enum(enum_desc) = proto_kind {
+                    let name_to_number: std::collections::HashMap<String, i32> = enum_desc
+                        .values()
+                        .map(|v| (v.name().to_string(), v.number()))
+                        .collect();
+                    let tag = wire::encode_tag(proto_number, wire::WIRE_VARINT);
+                    return Ok((
+                        FieldEncoderKind::EnumLookup(EnumLookupEncoder {
+                            name_to_number,
+                            enum_name: enum_desc.name().to_string(),
+                        }),
+                        tag,
+                    ));
+                }
+            }
+
             let (encode_fn, wire_type) = select_scalar_encoder(arrow_type, proto_kind, mode)?;
             let tag = wire::encode_tag(proto_number, wire_type);
             Ok((FieldEncoderKind::Scalar(encode_fn), tag))

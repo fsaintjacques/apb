@@ -80,6 +80,10 @@ enum Command {
         #[arg(long)]
         out: Option<String>,
 
+        /// Allow type coercions globally (e.g. string → enum).
+        #[arg(long)]
+        coerce: bool,
+
         /// Suppress progress messages.
         #[arg(long)]
         quiet: bool,
@@ -106,8 +110,9 @@ fn main() {
             ipc,
             out_format,
             out,
+            coerce,
             quiet,
-        } => run_transcode(descriptor, message, query, ipc, out_format, out, quiet),
+        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, quiet),
     };
 
     if let Err(e) = result {
@@ -158,6 +163,7 @@ fn run_validate(
     let options = InferOptions {
         allow_unmapped_proto: !strict,
         allow_unmapped_arrow: !strict,
+        ..InferOptions::default()
     };
 
     let mut report = validation::validate(&input.schema, &msg_desc, &options);
@@ -188,6 +194,7 @@ fn run_transcode(
     ipc: Option<String>,
     out_format: OutputFormat,
     out: Option<String>,
+    coerce: bool,
     quiet: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
@@ -199,7 +206,11 @@ fn run_transcode(
         eprintln!("Schema: {} Arrow fields", input.schema.fields().len());
     }
 
-    let mapping = infer_mapping(&input.schema, &msg_desc, &InferOptions::default())?;
+    let infer_opts = InferOptions {
+        coerce_all: coerce,
+        ..InferOptions::default()
+    };
+    let mapping = infer_mapping(&input.schema, &msg_desc, &infer_opts)?;
 
     if !quiet {
         eprintln!(

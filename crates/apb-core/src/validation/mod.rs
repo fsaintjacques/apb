@@ -23,6 +23,7 @@ pub fn validate(
     let permissive = InferOptions {
         allow_unmapped_proto: true,
         allow_unmapped_arrow: true,
+        coerce_all: options.coerce_all,
     };
 
     match infer_mapping(arrow_schema, message, &permissive) {

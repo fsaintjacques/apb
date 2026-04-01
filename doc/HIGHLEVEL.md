@@ -4,8 +4,8 @@
 
 `apb` is a Rust library and CLI that transcodes Arrow record batches into
 protobuf messages. It targets teams that define protobuf schemas and need to
-convert columnar Arrow Flight streams into row-wise protobuf messages with
-minimal friction.
+convert columnar Arrow data into row-wise protobuf messages with minimal
+friction.
 
 The library works with dynamic protobuf binary descriptors
 (`FileDescriptorSet`) — no code generation, no compile-time schema dependency.
@@ -18,28 +18,20 @@ of `apb`.
 apb/
 ├── apb-core       # Library: schema mapping, transcoding, validation
 │                   #   No I/O, no async. Accepts Arrow arrays + descriptors,
-│                   #   produces bytes/arrays. This is what other Rust projects
-│                   #   embed.
-├── apb-source     # Library: descriptor + Arrow data source adapters
-│                   #   (fs, https, object store, Flight, BQ Storage Read API)
-│                   #   Async, pluggable. Optional dependency.
-└── apb-cli        # Binary: CLI wrapping core + source
+│                   #   produces bytes/arrays. Embeddable anywhere.
+└── apb-cli        # Binary: CLI with DuckDB + IPC input
 ```
 
 `apb-core` is the primary library crate. It has no network or filesystem
 dependencies — callers provide `FileDescriptorSet` bytes and `RecordBatch`es,
-and get back encoded output. This keeps the library embeddable in any context
-(WASM, embedded services, other CLIs).
+and get back encoded output.
 
-`apb-source` handles I/O: fetching descriptors from remote sources and reading
-Arrow data from Flight/BQ/IPC. It depends on `apb-core`.
-
-`apb-cli` is a thin binary that wires together `apb-core` and `apb-source`
-behind a CLI interface.
+`apb-cli` is the CLI binary with two input modes (DuckDB SQL queries and Arrow
+IPC streams) and three output formats. DuckDB is an optional feature.
 
 ## Architecture
 
-The core library is split into two independent stages:
+The core library is split into two stages:
 
 ```
 ┌──────────────────┐       ┌─────────────┐       ┌──────────────┐
@@ -59,16 +51,15 @@ protobuf fields. Two modes:
 
 Automatic mapping with a well-defined precedence:
 
-1. **Annotations** — proto field/message options that explicitly declare the
-   Arrow column binding. Always takes priority when present.
+1. **Annotations** — proto field options (`(apb).arrow_name`, `(apb).coerce`)
+   that explicitly declare the Arrow column binding. Always takes priority.
 2. **Name match** — strict, case-sensitive match between Arrow field name and
-   proto field name. No normalization, no fuzzy matching. Used for fields
-   without annotations.
+   proto field name. No normalization, no fuzzy matching.
 
 #### Explicit mode
 
 The caller provides the full mapping directly (e.g. from a config file or API).
-No inference is performed.
+No inference is performed. Scalar fields only.
 
 ### Stage 2: Transcoding
 
@@ -79,181 +70,151 @@ all schema-dependent work:
 - Column index → proto field bindings as a flat array (no per-row lookup)
 - Resolved encoder function per field (including coercion)
 - Flattened nested message serialization plan
-- Null handling strategy per field (from Arrow schema nullability)
+- Null handling strategy per field
 
 The `Transcoder` is then called per batch with no further schema resolution.
 Its lifetime is bound to the stream — one transcoder per stream.
 
 ```rust
-let transcoder = Transcoder::new(&mapping)?;  // once per stream
-transcoder.transcode(&batch, &mut output)?;   // per batch, cheap
+let transcoder = Transcoder::new(&mapping)?;
+transcoder.transcode_delimited(&batch, &mut output)?;
 ```
-
-The transcoder is independent of how the mapping was derived.
 
 ## Output Formats
 
 ### Varint-delimited stream
 
 Standard protobuf length-delimited encoding. Each row becomes one
-length-prefixed message written sequentially into a single byte buffer.
+length-prefixed message written sequentially into a byte buffer.
 
-### Arrow-native binary column
+### Arrow BinaryArray
 
 All serialized messages are written into one contiguous buffer with an offsets
-array, forming a `BinaryArray`. This avoids per-row allocation and allows the
-output to be forwarded through Arrow Flight or written to Parquet without
-copying.
+array, forming a `BinaryArray`. Zero per-row allocation. Can be forwarded
+through Arrow Flight or written to Parquet as a binary column.
+
+### Proto JSON (via CLI)
+
+Newline-delimited JSON using prost-reflect's proto-canonical JSON
+serialization. Useful for debugging and inspection.
 
 ## Type System
 
 ### Strict by default
 
-Arrow types must match their corresponding proto wire types exactly (or be in a
-safe, lossless set — e.g. Arrow `Int64` → proto `int64`). Mismatches are
-mapping errors caught at validation time.
+Arrow types must match their corresponding proto wire types exactly (or be in
+a safe, lossless set). Mismatches are mapping errors caught at validation time.
+
+### Lossless mappings
+
+| Arrow               | Proto          |
+|---------------------|---------------|
+| Boolean             | bool          |
+| Int32               | int32, sint32, sfixed32 |
+| Int64               | int64, sint64, sfixed64 |
+| UInt32              | uint32, fixed32 |
+| UInt64              | uint64, fixed64 |
+| Float32             | float         |
+| Float64             | double        |
+| Utf8 / LargeUtf8    | string        |
+| Binary / LargeBinary | bytes        |
+| Int32               | enum          |
+| Timestamp(*, *)     | google.protobuf.Timestamp |
+| Duration(*)         | google.protobuf.Duration |
 
 ### Opt-in coercion
 
-Coercion (e.g. Arrow `Int64` → proto `int32`) is available per-field via
-annotation. The field owner explicitly opts in and accepts the risk of
-truncation or precision loss.
+Coercion is available per-field via annotation or globally via `--coerce`:
+
+- Integer narrowing/widening (Int64 → int32, truncation check)
+- Float narrowing (Float64 → float, precision loss)
+- String/bytes crossover (Utf8 → bytes, Binary → string)
+- String → enum (runtime name lookup)
+- Temporal → integer (Timestamp → int64, Date32 → int32)
+
+### String → enum encoding
+
+String values are looked up in a precomputed `HashMap<String, i32>` of enum
+variant names. Unknown values are handled by `--unknown-enum`:
+
+- `error` — fail the batch (default)
+- `default` — write 0 (proto3 zero variant)
+- `skip` — omit the field
+
+### Dictionary arrays
+
+`DictionaryArray` is resolved to its value type before compatibility checking.
+Dictionary-encoded strings are common in Arrow data from Parquet and BigQuery.
 
 ## Nested Types
 
-Supported from v1 with arbitrary depth.
+Supported at arbitrary depth:
 
 | Arrow             | Proto              | Notes                                      |
 |-------------------|--------------------|-------------------------------------------|
-| `StructArray`     | nested message     |                                            |
-| `ListArray`       | `repeated` field   |                                            |
+| `StructArray`     | nested message     | Recursive field matching                   |
+| `ListArray`       | `repeated` field   | Packed for numeric scalars                 |
 | `MapArray`        | `map<K,V>`         | Proto map key constraints apply            |
-| `StructArray`     | `oneof`            | Nullable children, at most one non-null per row |
+| `StructArray`     | `oneof`            | Nullable children, at most one non-null    |
 
 ### Oneof mapping
 
-A proto `oneof` maps to an Arrow `StructArray` where each child is a nullable
-column corresponding to a oneof variant. The transcoder validates that at most
-one child is non-null per row.
-
-## Descriptor Loading
-
-The library accepts a `FileDescriptorSet` as parsed bytes — no I/O concerns.
-
-The CLI handles fetching from pluggable sources:
-
-| Source         | Scheme       |
-|---------------|-------------|
-| Local file    | `file://`   |
-| HTTPS         | `https://`  |
-| Object store  | `gs://`, `s3://` |
-
-Descriptors are fetched once at startup and held for the lifetime of the
-process. No refresh or caching logic.
+A proto `oneof` maps to an Arrow `StructArray` named after the oneof group.
+Each child column corresponds to a variant. The transcoder validates that at
+most one child is non-null per row.
 
 ## CLI
 
-The CLI is both a validation tool and a standalone transcoding pipeline.
+### Input modes
+
+| Mode | Flag | Description |
+|------|------|-------------|
+| DuckDB query | `--query "SELECT ..."` | Any SQL — parquet, csv, BigQuery via extensions |
+| Arrow IPC | `--ipc <path>` | File or stdin (`--ipc -`) |
+
+DuckDB is an optional feature (`--features duckdb` or `--features duckdb-bundled`).
+Without it, only IPC input is available.
 
 ### `apb validate`
 
-Takes a proto descriptor and an Arrow schema, produces a diagnostic report:
-
-- **Mapped fields** — which Arrow columns bind to which proto fields, and how
-  (annotation vs name-match).
-- **Unmapped Arrow fields** — columns with no proto counterpart (warning).
-- **Unmapped proto fields** — proto fields with no Arrow counterpart (warning).
-- **Type errors** — incompatible types without coercion annotation (error).
-- **Oneof violations** — structural issues in oneof-mapped structs (error).
-
-Enables consuming teams to run validation in CI when evolving their proto
-schemas.
+Colored side-by-side view showing Arrow columns mapped to proto fields in
+proto field number order. IDL-style proto field display. Nested fields
+indented. Unmapped fields highlighted. Exit code 1 on errors, 0 otherwise.
+`--strict` promotes warnings to errors.
 
 ### `apb transcode`
 
-Reads Arrow data from a source, transcodes to protobuf, writes to stdout or
-file.
+Stream batches from input, transcode, write output.
 
-#### Input sources
-
-| Source                        | Flag / scheme     |
-|-------------------------------|-------------------|
-| Arrow Flight endpoint         | `--flight <url>`  |
-| BigQuery Storage Read API     | `--bq <table>`    |
-| Arrow IPC file / stdin        | `--ipc <path>`    |
-
-#### Output formats
-
-| Format                        | Flag              |
-|-------------------------------|-------------------|
-| Protobuf binary (delimited)   | `--out-format=proto-delimited` (default) |
-| Protobuf JSON (newline-delimited) | `--out-format=proto-jsonl` |
-| Arrow IPC (binary column)     | `--out-format=arrow-ipc`     |
-
-Output goes to stdout by default, or to a file with `--out <path>`.
+| Flag | Description |
+|------|-------------|
+| `--out-format` | `proto-delimited` (default), `proto-jsonl`, `arrow-ipc` |
+| `--out <path>` | Output file (default: stdout) |
+| `--coerce` | Enable all type coercions globally |
+| `--unknown-enum` | `error`, `default`, or `skip` for invalid enum strings |
+| `-v` / `-vv` | Verbose logging (info / debug) |
 
 ## Error Handling
 
-Fail the entire batch on any row-level error. The error message must be
-actionable: which row, which field, what went wrong, and what the expected
-type/value was.
+Fail the entire batch on any row-level error. The error message is actionable:
+which row, which field, what went wrong, and what was expected.
 
-## C ABI
+## Validation Report
 
-`apb-core` is designed to be exposed as a C shared library via a thin
-`apb-cabi` crate. The core's sync, no-I/O design means nothing async crosses
-the FFI boundary.
+The `validate` command produces a structured report usable both for humans
+(colored terminal output) and machines (JSON via `--format json`). The report
+includes:
 
-### API surface
+- Mapped fields with binding method and type mode
+- Unmapped Arrow fields (no proto counterpart)
+- Unmapped proto fields (missing from query)
+- Type errors with reasons
+- Structural errors (oneof not a struct, etc.)
+- Nested sub-reports for composite fields
 
-| Function | Signature sketch |
-|----------|-----------------|
-| Descriptor loading | `apb_descriptor_parse(buf, len) -> *mut Descriptor` |
-| Schema mapping | `apb_mapping_infer(descriptor, arrow_schema) -> *mut Mapping` |
-| Transcoder | `apb_transcoder_new(mapping) -> *mut Transcoder` |
-| Transcode (delimited) | `apb_transcode_delimited(transcoder, batch, out_buf, out_len) -> status` |
-| Transcode (arrow) | `apb_transcode_arrow(transcoder, batch, out_array, out_schema) -> status` |
-| Validation | `apb_validate(descriptor, arrow_schema) -> *const c_char` (JSON report) |
-| Error detail | `apb_last_error() -> *const c_char` |
-| Free functions | `apb_*_free(ptr)` per opaque type |
+## Future
 
-### Arrow interop
-
-Arrow data crosses the boundary via the
-[Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
-(`ArrowArray` + `ArrowSchema` structs). Zero-copy, supported by `arrow-rs` and
-every major Arrow implementation (PyArrow, Go, C++, Java).
-
-### Ownership
-
-- Opaque pointers returned by `apb_*_new` / `apb_*_parse` are owned by the
-  caller and must be freed with the corresponding `apb_*_free`.
-- Output buffers for delimited mode are library-owned and valid until the next
-  call or free. Caller must copy if needed beyond that.
-- Error strings from `apb_last_error` are library-owned, valid until the next
-  call on the same thread.
-
-### Scope
-
-Not in v1. The `apb-core` API is designed so that adding `apb-cabi` later
-requires no changes to the core — just a thin wrapper crate.
-
-## Scope
-
-### v1
-
-- Schema mapping: infer (name + annotations) and explicit modes
-- Transcoding: all output formats (proto-delimited, proto-jsonl, arrow-ipc)
-- Nested types: struct, list, map, oneof at arbitrary depth
-- Strict type matching with opt-in coercion via annotation
-- CLI: `validate` and `transcode` subcommands
-- Input sources: Arrow Flight, BigQuery Storage Read API, Arrow IPC
-- Descriptor loading: fs, https, object store (gs, s3)
-- Batch-level error handling with actionable messages
-
-### Future
-
+- `apb generate` — Arrow schema → proto descriptor/IDL generation
+- C ABI (`apb-cabi` crate) for embedding in non-Rust applications
+- Proto → Arrow reverse transcoding (decode)
 - Performance tuning (SIMD, vectorized encoding)
-- Observability and metrics
-- Additional object store backends
-- Proto → Arrow reverse transcoding

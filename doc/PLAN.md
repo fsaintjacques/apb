@@ -2,29 +2,21 @@
 
 ## Chunks
 
-| #  | Name                              | Depends on | Crate(s)     | Status |
-|----|-----------------------------------|------------|--------------|--------|
-| 01 | Project scaffold + descriptor parsing | —      | apb-core     | Done   |
-| 02a | Type system                       | 01       | apb-core     | Done   |
-| 02b | Schema mapping                    | 02a      | apb-core     | Done   |
-| 02c | Validation report                 | 02b      | apb-core     | Done   |
-| 03 | Transcoder — scalar fields        | 02b      | apb-core     | Done   |
-| 04 | Transcoder — nested types         | 03       | apb-core     | Done   |
-| 05+06 | CLI (DuckDB + IPC input)       | 04       | apb-cli      |        |
-
-## Dependency graph
-
-```
-01 ──▶ 02a ──▶ 02b ──▶ 02c ──┐
-                  │            │
-                  └──▶ 03 ──▶ 04
-                               │
-                               ▼
-                             05+06 (CLI)
-```
-
-Note: `apb-source` crate eliminated. DuckDB replaces file/remote source
-adapters. Arrow IPC stdin covers piping from Flight/BQ/other tools.
+| #     | Name                                     | Status |
+|-------|------------------------------------------|--------|
+| 01    | Project scaffold + descriptor parsing    | Done   |
+| 02a   | Type system                              | Done   |
+| 02b   | Schema mapping                           | Done   |
+| 02c   | Validation report                        | Done   |
+| 03    | Transcoder — scalar fields               | Done   |
+| 04    | Transcoder — nested types                | Done   |
+| 05+06 | CLI (DuckDB + IPC input, 3 output modes) | Done   |
+|       | Well-known type encoders (Timestamp/Duration) | Done |
+|       | String → enum encoding + `--coerce`      | Done   |
+|       | `--unknown-enum` flag                    | Done   |
+|       | Structured logging (`-v`/`-vv`)          | Done   |
+|       | Validate output redesign (colored, IDL)  | Done   |
+|       | Partial struct matching for repeated/map | Done   |
 
 ## Detailed plans
 
@@ -35,3 +27,10 @@ adapters. Arrow IPC stdin covers piping from Flight/BQ/other tools.
 - [plan-03-transcoder-scalars.md](plans/plan-03-transcoder-scalars.md)
 - [plan-04-transcoder-nested.md](plans/plan-04-transcoder-nested.md)
 - [plan-05-06-cli.md](plans/plan-05-06-cli.md) (replaces plan-05 + plan-06)
+
+## Future work
+
+- `apb generate` — Arrow schema → proto descriptor/IDL
+- C ABI (`apb-cabi`) for non-Rust consumers
+- Proto → Arrow decode (reverse transcoding)
+- Performance (SIMD, vectorized encoding)

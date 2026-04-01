@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 
 use clap::{Parser, Subcommand};
+use tracing::{debug, info, warn};
 
 use apb_core::descriptor::ProtoSchema;
 use apb_core::mapping::{infer_mapping, InferOptions};
@@ -17,6 +18,10 @@ use output::{OutputFormat, OutputWriter};
 #[derive(Parser)]
 #[command(name = "apb", about = "Arrow to Protobuf transcoder")]
 struct Cli {
+    /// Enable verbose logging (repeat for more: -v debug, -vv trace).
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -48,10 +53,6 @@ enum Command {
         /// Output format: human or json.
         #[arg(long, default_value = "human")]
         format: String,
-
-        /// Suppress progress messages.
-        #[arg(long)]
-        quiet: bool,
     },
 
     /// Read Arrow data, transcode to protobuf, write output.
@@ -87,10 +88,6 @@ enum Command {
         /// Behavior for unknown enum string values: error, default, skip.
         #[arg(long, value_enum, default_value = "error")]
         unknown_enum: CliUnknownEnum,
-
-        /// Suppress progress messages.
-        #[arg(long)]
-        quiet: bool,
     },
 }
 
@@ -112,8 +109,26 @@ impl From<CliUnknownEnum> for apb_core::transcode::UnknownEnumBehavior {
     }
 }
 
+fn init_logging(verbose: u8) {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = match verbose {
+        0 => EnvFilter::new("warn"),
+        1 => EnvFilter::new("info"),
+        2 => EnvFilter::new("debug"),
+        _ => EnvFilter::new("trace"),
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(io::stderr)
+        .with_target(false)
+        .init();
+}
+
 fn main() {
     let cli = Cli::parse();
+    init_logging(cli.verbose);
 
     let result = match cli.command {
         Command::Validate {
@@ -123,8 +138,7 @@ fn main() {
             ipc,
             strict,
             format,
-            quiet,
-        } => run_validate(descriptor, message, query, ipc, strict, format, quiet),
+        } => run_validate(descriptor, message, query, ipc, strict, format),
         Command::Transcode {
             descriptor,
             message,
@@ -134,17 +148,17 @@ fn main() {
             out,
             coerce,
             unknown_enum,
-            quiet,
-        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, unknown_enum.into(), quiet),
+        } => run_transcode(descriptor, message, query, ipc, out_format, out, coerce, unknown_enum.into()),
     };
 
     if let Err(e) = result {
-        eprintln!("error: {e}");
+        tracing::error!("{e}");
         std::process::exit(1);
     }
 }
 
 fn load_schema(descriptor: &str) -> Result<ProtoSchema, Box<dyn std::error::Error>> {
+    debug!(descriptor, "loading proto descriptor");
     let bytes = fs::read(descriptor)?;
     let schema = ProtoSchema::from_bytes(&bytes)?;
     Ok(schema)
@@ -156,10 +170,16 @@ fn open_input(
 ) -> Result<OpenInput, Box<dyn std::error::Error>> {
     match (query, ipc) {
         #[cfg(feature = "duckdb")]
-        (Some(q), _) => input::open_duckdb(&q),
+        (Some(q), _) => {
+            debug!("opening DuckDB input");
+            input::open_duckdb(&q)
+        }
         #[cfg(not(feature = "duckdb"))]
         (Some(_), _) => Err("--query requires the 'duckdb' feature (build with --features duckdb)".into()),
-        (_, Some(path)) => input::open_ipc(&path),
+        (_, Some(path)) => {
+            debug!(path, "opening IPC input");
+            input::open_ipc(&path)
+        }
         _ => Err("either --query or --ipc is required".into()),
     }
 }
@@ -171,7 +191,6 @@ fn run_validate(
     ipc: Option<String>,
     strict: bool,
     format: String,
-    quiet: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
     let msg_desc = proto_schema.message(&message)?;
@@ -179,9 +198,7 @@ fn run_validate(
     let source_name = ipc.as_deref().unwrap_or("(query)").to_string();
     let input = open_input(query, ipc)?;
 
-    if !quiet {
-        eprintln!("Validating: {}", message);
-    }
+    info!(message = %message, "validating schema mapping");
 
     let options = InferOptions {
         allow_unmapped_proto: !strict,
@@ -197,8 +214,6 @@ fn run_validate(
         _ => print!("{}", report.render_human()),
     }
 
-    // Flush stdout before checking status — ensures output isn't truncated
-    // when piped.
     io::Write::flush(&mut io::stdout())?;
 
     if report.status == ReportStatus::Error {
@@ -219,16 +234,14 @@ fn run_transcode(
     out: Option<String>,
     coerce: bool,
     unknown_enum: apb_core::transcode::UnknownEnumBehavior,
-    quiet: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
     let msg_desc = proto_schema.message(&message)?;
 
     let input = open_input(query, ipc)?;
 
-    if !quiet {
-        eprintln!("Schema: {} Arrow fields", input.schema.fields().len());
-    }
+    let arrow_fields = input.schema.fields().len();
+    info!(arrow_fields, "schema loaded");
 
     let infer_opts = InferOptions {
         coerce_all: coerce,
@@ -236,19 +249,22 @@ fn run_transcode(
     };
     let mapping = infer_mapping(&input.schema, &msg_desc, &infer_opts)?;
 
-    if !quiet {
-        eprintln!(
-            "Mapping: {} mapped, {} unmapped Arrow, {} unmapped proto",
-            mapping.bindings.len(),
-            mapping.unmapped_arrow.len(),
-            mapping.unmapped_proto.len(),
-        );
+    let mapped = mapping.bindings.len();
+    let unmapped_arrow = mapping.unmapped_arrow.len();
+    let unmapped_proto = mapping.unmapped_proto.len();
+    info!(mapped, unmapped_arrow, unmapped_proto, "mapping resolved");
+
+    if unmapped_arrow > 0 || unmapped_proto > 0 {
+        warn!(unmapped_arrow, unmapped_proto, "some fields are unmapped");
     }
 
     let transcoder = Transcoder::new(&mapping)?.with_unknown_enum(unknown_enum);
 
     let writer: Box<dyn io::Write> = match &out {
-        Some(path) => Box::new(fs::File::create(path)?),
+        Some(path) => {
+            debug!(path, "writing output to file");
+            Box::new(fs::File::create(path)?)
+        }
         None => Box::new(io::stdout().lock()),
     };
     let mut output = OutputWriter::new(&out_format, writer, &msg_desc)?;
@@ -258,16 +274,16 @@ fn run_transcode(
 
     for batch_result in input.into_batches() {
         let batch = batch_result?;
-        total_rows += batch.num_rows();
+        let rows = batch.num_rows();
+        total_rows += rows;
         total_batches += 1;
+        debug!(batch = total_batches, rows, "transcoding batch");
         output.write_batch(&batch, &transcoder)?;
     }
 
     output.finish()?;
 
-    if !quiet {
-        eprintln!("Done: {total_rows} rows in {total_batches} batches");
-    }
+    info!(total_rows, total_batches, "transcoding complete");
 
     Ok(())
 }

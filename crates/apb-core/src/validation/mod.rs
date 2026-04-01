@@ -172,6 +172,24 @@ fn validate_field(
     bound_indices.insert(arrow_index);
     let shape = infer_shape_summary(proto_field);
 
+    // Try to recurse into composite types (nested message, repeated message, map).
+    // This gives partial field matching instead of a flat type error.
+    if let Some(sub) = try_recurse_composite(arrow_field.data_type(), proto_field) {
+        mapped.push(MappedField {
+            arrow_name: arrow_field.name().to_string(),
+            arrow_type: format_arrow_type(arrow_field.data_type()),
+            arrow_index,
+            proto_name: proto_field.name().to_string(),
+            proto_number: proto_field.number(),
+            proto_type: format_proto_kind(&proto_field.kind(), &shape),
+            bind_method: "name-match".to_string(),
+            type_mode: "direct".to_string(),
+            field_shape: shape,
+        });
+        nested_reports.push(sub);
+        return;
+    }
+
     let compat = check_compatibility(arrow_field.data_type(), &proto_field.kind());
     match compat {
         TypeCompatibility::Compatible => {
@@ -186,18 +204,6 @@ fn validate_field(
                 type_mode: "direct".to_string(),
                 field_shape: shape,
             });
-
-            if let Kind::Message(msg_desc) = proto_field.kind() {
-                if let DataType::Struct(sub_fields) = arrow_field.data_type() {
-                    if proto_field.cardinality() != Cardinality::Repeated && !proto_field.is_map() {
-                        let sub_report = collect_all_diagnostics(sub_fields, &msg_desc);
-                        nested_reports.push(NestedReport {
-                            proto_field: proto_field.name().to_string(),
-                            report: Box::new(sub_report),
-                        });
-                    }
-                }
-            }
         }
         TypeCompatibility::CoercionAvailable { risk } => {
             type_errors.push(FieldTypeError {
@@ -210,47 +216,80 @@ fn validate_field(
             });
         }
         TypeCompatibility::Incompatible { reason } => {
-            if matches!(proto_field.kind(), Kind::Message(_))
-                && proto_field.cardinality() != Cardinality::Repeated
-                && !proto_field.is_map()
-            {
-                if let DataType::Struct(sub_fields) = arrow_field.data_type() {
-                    if let Kind::Message(msg_desc) = proto_field.kind() {
-                        mapped.push(MappedField {
-                            arrow_name: arrow_field.name().to_string(),
-                            arrow_type: format_arrow_type(arrow_field.data_type()),
-                            arrow_index,
-                            proto_name: proto_field.name().to_string(),
-                            proto_number: proto_field.number(),
-                            proto_type: format_proto_kind(&proto_field.kind(), &shape),
-                            bind_method: "name-match".to_string(),
-                            type_mode: "direct".to_string(),
-                            field_shape: FieldShapeSummary::Message,
-                        });
-                        let sub_report = collect_all_diagnostics(sub_fields, &msg_desc);
-                        nested_reports.push(NestedReport {
-                            proto_field: proto_field.name().to_string(),
-                            report: Box::new(sub_report),
-                        });
-                        return;
+            type_errors.push(FieldTypeError {
+                arrow_name: arrow_field.name().to_string(),
+                arrow_type: format_arrow_type(arrow_field.data_type()),
+                proto_name: proto_field.name().to_string(),
+                proto_number: proto_field.number(),
+                proto_type: proto_kind_str(proto_field),
+                reason,
+            });
+        }
+    }
+}
+
+/// Try to recurse into a composite field (nested message, repeated message,
+/// or map with message values). Returns a NestedReport if the Arrow type
+/// matches the expected composite structure.
+fn try_recurse_composite(
+    arrow_type: &DataType,
+    proto_field: &FieldDescriptor,
+) -> Option<NestedReport> {
+    let msg_desc = match proto_field.kind() {
+        Kind::Message(desc) => desc,
+        _ => return None,
+    };
+
+    // Non-repeated, non-map message: Arrow should be Struct.
+    if proto_field.cardinality() != Cardinality::Repeated && !proto_field.is_map() {
+        if let DataType::Struct(sub_fields) = arrow_type {
+            let sub_report = collect_all_diagnostics(sub_fields, &msg_desc);
+            return Some(NestedReport {
+                proto_field: proto_field.name().to_string(),
+                report: Box::new(sub_report),
+            });
+        }
+        return None;
+    }
+
+    // Repeated message: Arrow should be List<Struct> or LargeList<Struct>.
+    if proto_field.cardinality() == Cardinality::Repeated && !proto_field.is_map() {
+        let element_type = match arrow_type {
+            DataType::List(f) | DataType::LargeList(f) => f.data_type(),
+            _ => return None,
+        };
+        if let DataType::Struct(sub_fields) = element_type {
+            let sub_report = collect_all_diagnostics(sub_fields, &msg_desc);
+            return Some(NestedReport {
+                proto_field: format!("{}[]", proto_field.name()),
+                report: Box::new(sub_report),
+            });
+        }
+        return None;
+    }
+
+    // Map field: Arrow should be Map<K, Struct>. Recurse into the value type.
+    if proto_field.is_map() {
+        if let DataType::Map(entry_field, _) = arrow_type {
+            if let DataType::Struct(entry_fields) = entry_field.data_type() {
+                if entry_fields.len() == 2 {
+                    let value_type = entry_fields[1].data_type();
+                    let value_desc = msg_desc.map_entry_value_field();
+                    if let Kind::Message(value_msg) = value_desc.kind() {
+                        if let DataType::Struct(sub_fields) = value_type {
+                            let sub_report = collect_all_diagnostics(sub_fields, &value_msg);
+                            return Some(NestedReport {
+                                proto_field: format!("{}[value]", proto_field.name()),
+                                report: Box::new(sub_report),
+                            });
+                        }
                     }
                 }
-                structural_errors.push(StructuralError {
-                    path: proto_field.name().to_string(),
-                    message: format!("expected Struct for nested message, got {}", arrow_field.data_type()),
-                });
-            } else {
-                type_errors.push(FieldTypeError {
-                    arrow_name: arrow_field.name().to_string(),
-                    arrow_type: format_arrow_type(arrow_field.data_type()),
-                    proto_name: proto_field.name().to_string(),
-                    proto_number: proto_field.number(),
-                    proto_type: proto_kind_str(proto_field),
-                    reason,
-                });
             }
         }
     }
+
+    None
 }
 
 fn validate_oneof(

@@ -82,14 +82,12 @@ pub struct MessageEncoder {
 pub struct RepeatedEncoder {
     /// Encoder for each element.
     pub element_kind: Box<FieldEncoderKind>,
-    /// Wire type of each element (for tag encoding in unpacked mode).
-    pub element_wire_type: u8,
-    /// Proto field number (for element tags in unpacked mode).
-    pub field_number: u32,
     /// Whether to use packed encoding (numeric scalars only).
     pub packed: bool,
     /// Pre-encoded tag for packed encoding (length-delimited).
     pub packed_tag: Vec<u8>,
+    /// Pre-encoded tag for unpacked encoding (per-element).
+    pub element_tag: Vec<u8>,
 }
 
 /// Encodes a MapArray as proto map<K,V> (repeated entry messages).
@@ -250,15 +248,15 @@ fn build_encoder_kind(
             };
 
             let packed_tag = wire::encode_tag(proto_number, wire::WIRE_LENGTH_DELIMITED);
+            let element_tag = wire::encode_tag(proto_number, element_wire_type);
 
             let tag = wire::encode_tag(proto_number, wire::WIRE_LENGTH_DELIMITED);
             Ok((
                 FieldEncoderKind::Repeated(RepeatedEncoder {
                     element_kind: Box::new(element_kind),
-                    element_wire_type,
-                    field_number: proto_number,
                     packed,
                     packed_tag,
+                    element_tag,
                 }),
                 tag,
             ))

@@ -331,11 +331,10 @@ fn encode_repeated(
         wire::finish_length_delimited(buf, len_pos);
     } else {
         // Unpacked: each element gets its own tag.
-        let element_tag = wire::encode_tag(rep_enc.field_number, rep_enc.element_wire_type);
         for i in start..end {
             match &*rep_enc.element_kind {
                 FieldEncoderKind::Scalar(kind) => {
-                    buf.extend_from_slice(&element_tag);
+                    buf.extend_from_slice(&rep_enc.element_tag);
                     kind.encode(values, i, buf)
                         .map_err(|e| TranscodeError::FieldError {
                             row,
@@ -345,7 +344,7 @@ fn encode_repeated(
                         })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
-                    buf.extend_from_slice(&element_tag);
+                    buf.extend_from_slice(&rep_enc.element_tag);
                     encode_nested_message_body(buf, i, values, msg_enc)?;
                 }
                 _ => {

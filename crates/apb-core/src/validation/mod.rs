@@ -166,6 +166,7 @@ fn proto_kind_str(field: &FieldDescriptor) -> String {
     format_proto_kind(&field.kind(), &shape)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_field(
     arrow_fields: &Fields,
     proto_field: &FieldDescriptor,

@@ -57,9 +57,9 @@ pub fn encode_length_delimited(data: &[u8], buf: &mut Vec<u8>) {
 fn varint_len(value: u64) -> usize {
     match value {
         0..=0x7F => 1,
-        0..=0x3FFF => 2,
-        0..=0x1FFFFF => 3,
-        0..=0xFFFFFFF => 4,
+        0x80..=0x3FFF => 2,
+        0x4000..=0x1FFFFF => 3,
+        0x200000..=0xFFFFFFF => 4,
         _ => 5, // enough for any length-delimited body (max 2GB)
     }
 }

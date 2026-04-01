@@ -479,14 +479,13 @@ fn encode_oneof(
     buf.extend_from_slice(&variant.tag);
     match &*variant.kind {
         FieldEncoderKind::Scalar(kind) => {
-            kind.encode(child.as_ref(), row, buf).map_err(|e| {
-                TranscodeError::FieldError {
+            kind.encode(child.as_ref(), row, buf)
+                .map_err(|e| TranscodeError::FieldError {
                     row,
                     arrow_field: variant.proto_name.clone(),
                     proto_field: variant.proto_name.clone(),
                     reason: e.reason,
-                }
-            })?;
+                })?;
         }
         FieldEncoderKind::EnumLookup(lookup) => {
             let wrote = encode_enum_lookup(

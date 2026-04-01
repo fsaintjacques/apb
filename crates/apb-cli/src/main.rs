@@ -236,6 +236,7 @@ fn run_validate(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_transcode(
     descriptor: String,
     message: String,

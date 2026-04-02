@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use tracing::{debug, info, warn};
 
 use apb_core::descriptor::ProtoSchema;
+use apb_core::generate::generate_file_descriptor;
 use apb_core::mapping::{infer_mapping, InferOptions};
 use apb_core::transcode::Transcoder;
 use apb_core::validation::{self, ReportStatus};
@@ -53,6 +54,29 @@ enum Command {
         /// Output format: human or json.
         #[arg(long, default_value = "human")]
         format: String,
+    },
+
+    /// Generate a proto descriptor from an Arrow schema.
+    Generate {
+        /// DuckDB SQL query to read the Arrow schema.
+        #[arg(long, group = "input_source")]
+        query: Option<String>,
+
+        /// Arrow IPC file path (or - for stdin).
+        #[arg(long, group = "input_source")]
+        ipc: Option<String>,
+
+        /// Proto package name.
+        #[arg(long)]
+        package: String,
+
+        /// Proto message name.
+        #[arg(long)]
+        message: String,
+
+        /// Output file path (default: stdout).
+        #[arg(long)]
+        out: Option<String>,
     },
 
     /// Read Arrow data, transcode to protobuf, write output.
@@ -139,6 +163,13 @@ fn main() {
             strict,
             format,
         } => run_validate(descriptor, message, query, ipc, strict, format),
+        Command::Generate {
+            query,
+            ipc,
+            package,
+            message,
+            out,
+        } => run_generate(query, ipc, package, message, out),
         Command::Transcode {
             descriptor,
             message,
@@ -193,6 +224,42 @@ fn open_input(
         }
         _ => Err("either --query or --ipc is required".into()),
     }
+}
+
+fn run_generate(
+    query: Option<String>,
+    ipc: Option<String>,
+    package: String,
+    message: String,
+    out: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let input = open_input(query, ipc)?;
+
+    info!(
+        arrow_fields = input.schema.fields().len(),
+        package, message, "generating proto descriptor"
+    );
+
+    let fd = generate_file_descriptor(&input.schema, &package, &message)?;
+
+    let fds = prost_reflect::prost_types::FileDescriptorSet {
+        file: vec![fd],
+    };
+
+    let bytes = prost_reflect::prost::Message::encode_to_vec(&fds);
+
+    let mut writer: Box<dyn io::Write> = match &out {
+        Some(path) => {
+            debug!(path, "writing descriptor to file");
+            Box::new(fs::File::create(path)?)
+        }
+        None => Box::new(io::stdout().lock()),
+    };
+    writer.write_all(&bytes)?;
+    writer.flush()?;
+
+    info!("descriptor generated");
+    Ok(())
 }
 
 fn run_validate(

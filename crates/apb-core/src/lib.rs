@@ -1,4 +1,5 @@
 pub mod descriptor;
+pub mod generate;
 pub mod mapping;
 pub mod transcode;
 pub mod types;

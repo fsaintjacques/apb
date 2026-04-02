@@ -2,23 +2,30 @@ mod model;
 
 pub use model::GenerateError;
 
+use std::collections::HashSet;
+
 use arrow_schema::{DataType, Field, Schema};
 use prost_types::field_descriptor_proto::{Label, Type};
-use prost_types::{
-    DescriptorProto, FieldDescriptorProto, FileDescriptorProto, MessageOptions,
-};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, MessageOptions};
+
+use model::{MAX_FIELD_NUMBER, RESERVED_RANGE};
 
 /// Generate a `FileDescriptorProto` from an Arrow schema.
 ///
 /// Produces a proto3 file descriptor with a single top-level message.
-/// Field numbers are auto-assigned sequentially starting at 1.
+/// Field numbers are auto-assigned sequentially starting at 1, skipping
+/// the protobuf reserved range (19000–19999).
 pub fn generate_file_descriptor(
     schema: &Schema,
     package: &str,
     message_name: &str,
 ) -> Result<FileDescriptorProto, GenerateError> {
     let mut ctx = GenContext::default();
-    let message = generate_message(message_name, schema.fields().iter().map(|f| f.as_ref()), &mut ctx)?;
+    let message = generate_message(
+        message_name,
+        schema.fields().iter().map(|f| f.as_ref()),
+        &mut ctx,
+    )?;
 
     let mut file = FileDescriptorProto {
         name: Some(format!("{package}.proto")),
@@ -29,10 +36,12 @@ pub fn generate_file_descriptor(
     };
 
     if ctx.needs_timestamp {
-        file.dependency.push("google/protobuf/timestamp.proto".to_string());
+        file.dependency
+            .push("google/protobuf/timestamp.proto".to_string());
     }
     if ctx.needs_duration {
-        file.dependency.push("google/protobuf/duration.proto".to_string());
+        file.dependency
+            .push("google/protobuf/duration.proto".to_string());
     }
 
     Ok(file)
@@ -45,6 +54,77 @@ struct GenContext {
     needs_duration: bool,
 }
 
+/// Resolved proto type for a leaf (non-composite) Arrow DataType.
+struct ResolvedType {
+    proto_type: Type,
+    type_name: Option<String>,
+}
+
+/// Resolve a leaf Arrow DataType to its proto type and optional type_name.
+/// Handles scalars, Timestamp, and Duration. Returns None for composite types.
+fn resolve_leaf_type(
+    dt: &DataType,
+    field_name: &str,
+    ctx: &mut GenContext,
+) -> Result<Option<ResolvedType>, GenerateError> {
+    if is_scalar(dt) {
+        let proto_type = scalar_to_proto_type(dt, field_name)?;
+        return Ok(Some(ResolvedType {
+            proto_type,
+            type_name: None,
+        }));
+    }
+    match dt {
+        DataType::Timestamp(_, _) => {
+            ctx.needs_timestamp = true;
+            Ok(Some(ResolvedType {
+                proto_type: Type::Message,
+                type_name: Some(".google.protobuf.Timestamp".to_string()),
+            }))
+        }
+        DataType::Duration(_) => {
+            ctx.needs_duration = true;
+            Ok(Some(ResolvedType {
+                proto_type: Type::Message,
+                type_name: Some(".google.protobuf.Duration".to_string()),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Assign a field number, skipping the protobuf reserved range.
+fn assign_field_number(index: usize, message_name: &str) -> Result<i32, GenerateError> {
+    let mut number = (index as i32) + 1;
+    // Skip the reserved range 19000–19999.
+    if RESERVED_RANGE.contains(&number) {
+        number = *RESERVED_RANGE.end() + 1 + (number - *RESERVED_RANGE.start());
+    }
+    if number > MAX_FIELD_NUMBER {
+        return Err(GenerateError::TooManyFields {
+            message_name: message_name.to_string(),
+            count: index + 1,
+        });
+    }
+    Ok(number)
+}
+
+/// Pick a unique nested message name within the parent scope.
+fn unique_nested_name(base: &str, used: &mut HashSet<String>) -> String {
+    let name = to_message_name(base);
+    if used.insert(name.clone()) {
+        return name;
+    }
+    // Disambiguate with a numeric suffix.
+    for i in 2.. {
+        let candidate = format!("{name}{i}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
 fn generate_message<'a>(
     name: &str,
     fields: impl Iterator<Item = &'a Field>,
@@ -55,9 +135,11 @@ fn generate_message<'a>(
         ..Default::default()
     };
 
+    let mut used_names = HashSet::new();
+
     for (i, field) in fields.enumerate() {
-        let number = (i as i32) + 1;
-        generate_field(field, number, &mut message, ctx)?;
+        let number = assign_field_number(i, name)?;
+        generate_field(field, number, &mut message, ctx, &mut used_names)?;
     }
 
     Ok(message)
@@ -68,52 +150,29 @@ fn generate_field(
     number: i32,
     parent: &mut DescriptorProto,
     ctx: &mut GenContext,
+    used_names: &mut HashSet<String>,
 ) -> Result<(), GenerateError> {
     let data_type = resolve_dictionary(field.data_type());
 
+    // Try leaf type first (scalars, Timestamp, Duration).
+    if let Some(resolved) = resolve_leaf_type(data_type, field.name(), ctx)? {
+        parent.field.push(FieldDescriptorProto {
+            name: Some(field.name().to_string()),
+            number: Some(number),
+            r#type: Some(resolved.proto_type as i32),
+            type_name: resolved.type_name,
+            label: Some(Label::Optional as i32),
+            ..Default::default()
+        });
+        return Ok(());
+    }
+
     match data_type {
-        // Scalar types
-        dt if is_scalar(dt) => {
-            let proto_type = scalar_to_proto_type(dt, field.name())?;
-            parent.field.push(FieldDescriptorProto {
-                name: Some(field.name().to_string()),
-                number: Some(number),
-                r#type: Some(proto_type as i32),
-                label: Some(Label::Optional as i32),
-                ..Default::default()
-            });
-        }
-
-        // Timestamp -> google.protobuf.Timestamp
-        DataType::Timestamp(_, _) => {
-            ctx.needs_timestamp = true;
-            parent.field.push(FieldDescriptorProto {
-                name: Some(field.name().to_string()),
-                number: Some(number),
-                r#type: Some(Type::Message as i32),
-                type_name: Some(".google.protobuf.Timestamp".to_string()),
-                label: Some(Label::Optional as i32),
-                ..Default::default()
-            });
-        }
-
-        // Duration -> google.protobuf.Duration
-        DataType::Duration(_) => {
-            ctx.needs_duration = true;
-            parent.field.push(FieldDescriptorProto {
-                name: Some(field.name().to_string()),
-                number: Some(number),
-                r#type: Some(Type::Message as i32),
-                type_name: Some(".google.protobuf.Duration".to_string()),
-                label: Some(Label::Optional as i32),
-                ..Default::default()
-            });
-        }
-
         // Struct -> nested message
         DataType::Struct(sub_fields) => {
-            let nested_name = to_message_name(field.name());
-            let nested = generate_message(&nested_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
+            let nested_name = unique_nested_name(field.name(), used_names);
+            let nested =
+                generate_message(&nested_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
             parent.nested_type.push(nested);
             parent.field.push(FieldDescriptorProto {
                 name: Some(field.name().to_string()),
@@ -128,58 +187,35 @@ fn generate_field(
         // List -> repeated
         DataType::List(inner) | DataType::LargeList(inner) => {
             let inner_dt = resolve_dictionary(inner.data_type());
-            match inner_dt {
-                DataType::Struct(sub_fields) => {
-                    let nested_name = to_message_name(field.name());
-                    let nested = generate_message(&nested_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
-                    parent.nested_type.push(nested);
-                    parent.field.push(FieldDescriptorProto {
-                        name: Some(field.name().to_string()),
-                        number: Some(number),
-                        r#type: Some(Type::Message as i32),
-                        type_name: Some(nested_name),
-                        label: Some(Label::Repeated as i32),
-                        ..Default::default()
-                    });
-                }
-                dt if is_scalar(dt) => {
-                    let proto_type = scalar_to_proto_type(dt, field.name())?;
-                    parent.field.push(FieldDescriptorProto {
-                        name: Some(field.name().to_string()),
-                        number: Some(number),
-                        r#type: Some(proto_type as i32),
-                        label: Some(Label::Repeated as i32),
-                        ..Default::default()
-                    });
-                }
-                DataType::Timestamp(_, _) => {
-                    ctx.needs_timestamp = true;
-                    parent.field.push(FieldDescriptorProto {
-                        name: Some(field.name().to_string()),
-                        number: Some(number),
-                        r#type: Some(Type::Message as i32),
-                        type_name: Some(".google.protobuf.Timestamp".to_string()),
-                        label: Some(Label::Repeated as i32),
-                        ..Default::default()
-                    });
-                }
-                DataType::Duration(_) => {
-                    ctx.needs_duration = true;
-                    parent.field.push(FieldDescriptorProto {
-                        name: Some(field.name().to_string()),
-                        number: Some(number),
-                        r#type: Some(Type::Message as i32),
-                        type_name: Some(".google.protobuf.Duration".to_string()),
-                        label: Some(Label::Repeated as i32),
-                        ..Default::default()
-                    });
-                }
-                _ => {
-                    return Err(GenerateError::UnsupportedType {
-                        field_name: field.name().to_string(),
-                        arrow_type: inner.data_type().clone(),
-                    });
-                }
+
+            // Try leaf element type.
+            if let Some(resolved) = resolve_leaf_type(inner_dt, field.name(), ctx)? {
+                parent.field.push(FieldDescriptorProto {
+                    name: Some(field.name().to_string()),
+                    number: Some(number),
+                    r#type: Some(resolved.proto_type as i32),
+                    type_name: resolved.type_name,
+                    label: Some(Label::Repeated as i32),
+                    ..Default::default()
+                });
+            } else if let DataType::Struct(sub_fields) = inner_dt {
+                let nested_name = unique_nested_name(field.name(), used_names);
+                let nested =
+                    generate_message(&nested_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
+                parent.nested_type.push(nested);
+                parent.field.push(FieldDescriptorProto {
+                    name: Some(field.name().to_string()),
+                    number: Some(number),
+                    r#type: Some(Type::Message as i32),
+                    type_name: Some(nested_name),
+                    label: Some(Label::Repeated as i32),
+                    ..Default::default()
+                });
+            } else {
+                return Err(GenerateError::UnsupportedType {
+                    field_name: field.name().to_string(),
+                    arrow_type: inner.data_type().clone(),
+                });
             }
         }
 
@@ -198,32 +234,27 @@ fn generate_field(
             let key_dt = resolve_dictionary(key_field.data_type());
             let key_type = scalar_to_proto_type(key_dt, field.name())?;
 
-            let entry_name = format!("{}Entry", to_message_name(field.name()));
+            let entry_name = unique_nested_name(&format!("{}_entry", field.name()), used_names);
 
-            // Build value field descriptor
+            // Resolve value type.
             let value_dt = resolve_dictionary(value_field.data_type());
-            let (value_type, value_type_name) = match value_dt {
-                dt if is_scalar(dt) => (scalar_to_proto_type(dt, field.name())?, None),
-                DataType::Timestamp(_, _) => {
-                    ctx.needs_timestamp = true;
-                    (Type::Message, Some(".google.protobuf.Timestamp".to_string()))
-                }
-                DataType::Duration(_) => {
-                    ctx.needs_duration = true;
-                    (Type::Message, Some(".google.protobuf.Duration".to_string()))
-                }
-                DataType::Struct(sub_fields) => {
-                    let nested_name = format!("{}Value", to_message_name(field.name()));
-                    let nested = generate_message(&nested_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
-                    parent.nested_type.push(nested);
-                    (Type::Message, Some(nested_name))
-                }
-                _ => {
-                    return Err(GenerateError::UnsupportedType {
-                        field_name: field.name().to_string(),
-                        arrow_type: value_field.data_type().clone(),
-                    });
-                }
+            let (value_type, value_type_name) = if let Some(resolved) =
+                resolve_leaf_type(value_dt, field.name(), ctx)?
+            {
+                (resolved.proto_type, resolved.type_name)
+            } else if let DataType::Struct(sub_fields) = value_dt {
+                // Nested message for map value — placed inside the MapEntry.
+                let value_msg_name =
+                    unique_nested_name(&format!("{}_value", field.name()), used_names);
+                let nested =
+                    generate_message(&value_msg_name, sub_fields.iter().map(|f| f.as_ref()), ctx)?;
+                parent.nested_type.push(nested);
+                (Type::Message, Some(value_msg_name))
+            } else {
+                return Err(GenerateError::UnsupportedType {
+                    field_name: field.name().to_string(),
+                    arrow_type: value_field.data_type().clone(),
+                });
             };
 
             let entry_message = DescriptorProto {
@@ -382,36 +413,62 @@ mod tests {
     }
 
     #[test]
-    fn test_wellknown_timestamp() {
+    fn test_large_utf8_and_large_binary() {
         let schema = Schema::new(vec![
-            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+            Field::new("big_text", DataType::LargeUtf8, false),
+            Field::new("big_blob", DataType::LargeBinary, false),
         ]);
+        let fd = generate_file_descriptor(&schema, "test", "LargeTypes").unwrap();
+        let msg = &fd.message_type[0];
+        assert_eq!(msg.field[0].r#type, Some(Type::String as i32));
+        assert_eq!(msg.field[1].r#type, Some(Type::Bytes as i32));
+    }
+
+    #[test]
+    fn test_wellknown_timestamp() {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithTs").unwrap();
-        assert!(fd.dependency.contains(&"google/protobuf/timestamp.proto".to_string()));
-        assert!(!fd.dependency.contains(&"google/protobuf/duration.proto".to_string()));
+        assert!(fd
+            .dependency
+            .contains(&"google/protobuf/timestamp.proto".to_string()));
+        assert!(!fd
+            .dependency
+            .contains(&"google/protobuf/duration.proto".to_string()));
 
         let field = &fd.message_type[0].field[0];
-        assert_eq!(field.type_name.as_deref(), Some(".google.protobuf.Timestamp"));
+        assert_eq!(
+            field.type_name.as_deref(),
+            Some(".google.protobuf.Timestamp")
+        );
         assert_eq!(field.r#type, Some(Type::Message as i32));
     }
 
     #[test]
     fn test_wellknown_duration() {
-        let schema = Schema::new(vec![
-            Field::new("dur", DataType::Duration(TimeUnit::Nanosecond), false),
-        ]);
+        let schema = Schema::new(vec![Field::new(
+            "dur",
+            DataType::Duration(TimeUnit::Nanosecond),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithDur").unwrap();
-        assert!(fd.dependency.contains(&"google/protobuf/duration.proto".to_string()));
+        assert!(fd
+            .dependency
+            .contains(&"google/protobuf/duration.proto".to_string()));
 
         let field = &fd.message_type[0].field[0];
-        assert_eq!(field.type_name.as_deref(), Some(".google.protobuf.Duration"));
+        assert_eq!(
+            field.type_name.as_deref(),
+            Some(".google.protobuf.Duration")
+        );
     }
 
     #[test]
     fn test_no_imports_when_not_needed() {
-        let schema = Schema::new(vec![
-            Field::new("x", DataType::Int32, false),
-        ]);
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
         let fd = generate_file_descriptor(&schema, "test", "Simple").unwrap();
         assert!(fd.dependency.is_empty());
     }
@@ -422,28 +479,51 @@ mod tests {
             Field::new("x", DataType::Int32, false),
             Field::new("y", DataType::Utf8, false),
         ]);
-        let schema = Schema::new(vec![
-            Field::new("inner", DataType::Struct(inner_fields), true),
-        ]);
+        let schema = Schema::new(vec![Field::new(
+            "inner",
+            DataType::Struct(inner_fields),
+            true,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "Outer").unwrap();
         let msg = &fd.message_type[0];
 
-        // Should have a nested type
         assert_eq!(msg.nested_type.len(), 1);
         assert_eq!(msg.nested_type[0].name.as_deref(), Some("Inner"));
         assert_eq!(msg.nested_type[0].field.len(), 2);
 
-        // Parent field should reference the nested type
         let field = &msg.field[0];
         assert_eq!(field.r#type, Some(Type::Message as i32));
         assert_eq!(field.type_name.as_deref(), Some("Inner"));
     }
 
     #[test]
-    fn test_repeated_scalar() {
-        let schema = Schema::new(vec![
-            Field::new("tags", DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))), false),
+    fn test_deeply_nested_struct() {
+        let level2 = Fields::from(vec![Field::new("z", DataType::Int32, false)]);
+        let level1 = Fields::from(vec![
+            Field::new("y", DataType::Utf8, false),
+            Field::new("deep", DataType::Struct(level2), false),
         ]);
+        let schema = Schema::new(vec![Field::new("outer", DataType::Struct(level1), false)]);
+        let fd = generate_file_descriptor(&schema, "test", "Deep").unwrap();
+        let msg = &fd.message_type[0];
+
+        // Top-level has one nested type: "Outer"
+        assert_eq!(msg.nested_type.len(), 1);
+        let outer_nested = &msg.nested_type[0];
+        assert_eq!(outer_nested.name.as_deref(), Some("Outer"));
+        // "Outer" has one nested type: "Deep"
+        assert_eq!(outer_nested.nested_type.len(), 1);
+        assert_eq!(outer_nested.nested_type[0].name.as_deref(), Some("Deep"));
+        assert_eq!(outer_nested.nested_type[0].field.len(), 1);
+    }
+
+    #[test]
+    fn test_repeated_scalar() {
+        let schema = Schema::new(vec![Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithList").unwrap();
         let field = &fd.message_type[0].field[0];
         assert_eq!(field.name.as_deref(), Some("tags"));
@@ -452,13 +532,27 @@ mod tests {
     }
 
     #[test]
+    fn test_repeated_large_list() {
+        let schema = Schema::new(vec![Field::new(
+            "ids",
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, false))),
+            false,
+        )]);
+        let fd = generate_file_descriptor(&schema, "test", "WithLargeList").unwrap();
+        let field = &fd.message_type[0].field[0];
+        assert_eq!(field.name.as_deref(), Some("ids"));
+        assert_eq!(field.r#type, Some(Type::Int64 as i32));
+        assert_eq!(field.label, Some(Label::Repeated as i32));
+    }
+
+    #[test]
     fn test_repeated_message() {
         let inner = Fields::from(vec![Field::new("v", DataType::Int32, false)]);
-        let schema = Schema::new(vec![
-            Field::new("items", DataType::List(Arc::new(
-                Field::new("item", DataType::Struct(inner), false),
-            )), false),
-        ]);
+        let schema = Schema::new(vec![Field::new(
+            "items",
+            DataType::List(Arc::new(Field::new("item", DataType::Struct(inner), false))),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithRepeatedMsg").unwrap();
         let msg = &fd.message_type[0];
 
@@ -481,13 +575,14 @@ mod tests {
             ])),
             false,
         );
-        let schema = Schema::new(vec![
-            Field::new("labels", DataType::Map(Arc::new(entries), false), false),
-        ]);
+        let schema = Schema::new(vec![Field::new(
+            "labels",
+            DataType::Map(Arc::new(entries), false),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithMap").unwrap();
         let msg = &fd.message_type[0];
 
-        // Should have the MapEntry nested type
         assert_eq!(msg.nested_type.len(), 1);
         let entry = &msg.nested_type[0];
         assert_eq!(entry.name.as_deref(), Some("LabelsEntry"));
@@ -498,21 +593,57 @@ mod tests {
         assert_eq!(entry.field[1].name.as_deref(), Some("value"));
         assert_eq!(entry.field[1].r#type, Some(Type::Int32 as i32));
 
-        // Parent field
         let field = &msg.field[0];
         assert_eq!(field.label, Some(Label::Repeated as i32));
         assert_eq!(field.type_name.as_deref(), Some("LabelsEntry"));
     }
 
     #[test]
-    fn test_dictionary_resolved() {
-        let schema = Schema::new(vec![
-            Field::new(
-                "status",
-                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-                false,
-            ),
+    fn test_map_with_struct_value() {
+        let value_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, false),
         ]);
+        let entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Struct(value_fields), false),
+            ])),
+            false,
+        );
+        let schema = Schema::new(vec![Field::new(
+            "objects",
+            DataType::Map(Arc::new(entries), false),
+            false,
+        )]);
+        let fd = generate_file_descriptor(&schema, "test", "WithMapStruct").unwrap();
+        let msg = &fd.message_type[0];
+
+        // Should have both the value message and the MapEntry nested types.
+        assert_eq!(msg.nested_type.len(), 2);
+        let value_msg = msg
+            .nested_type
+            .iter()
+            .find(|m| m.name.as_deref() == Some("ObjectsValue"))
+            .expect("should have ObjectsValue nested type");
+        assert_eq!(value_msg.field.len(), 2);
+
+        let entry_msg = msg
+            .nested_type
+            .iter()
+            .find(|m| m.name.as_deref() == Some("ObjectsEntry"))
+            .expect("should have ObjectsEntry nested type");
+        assert_eq!(entry_msg.options.as_ref().unwrap().map_entry, Some(true));
+    }
+
+    #[test]
+    fn test_dictionary_resolved() {
+        let schema = Schema::new(vec![Field::new(
+            "status",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+        )]);
         let fd = generate_file_descriptor(&schema, "test", "WithDict").unwrap();
         let field = &fd.message_type[0].field[0];
         assert_eq!(field.r#type, Some(Type::String as i32));
@@ -520,11 +651,43 @@ mod tests {
 
     #[test]
     fn test_unsupported_type_error() {
-        let schema = Schema::new(vec![
-            Field::new("bad", DataType::Decimal128(10, 2), false),
-        ]);
+        let schema = Schema::new(vec![Field::new("bad", DataType::Decimal128(10, 2), false)]);
         let err = generate_file_descriptor(&schema, "test", "Bad").unwrap_err();
         assert!(matches!(err, GenerateError::UnsupportedType { .. }));
+    }
+
+    #[test]
+    fn test_duplicate_nested_names_disambiguated() {
+        // Two struct fields that produce the same PascalCase name.
+        let inner1 = Fields::from(vec![Field::new("a", DataType::Int32, false)]);
+        let inner2 = Fields::from(vec![Field::new("b", DataType::Utf8, false)]);
+        let schema = Schema::new(vec![
+            Field::new("foo_bar", DataType::Struct(inner1), false),
+            Field::new("foo__bar", DataType::Struct(inner2), false),
+        ]);
+        let fd = generate_file_descriptor(&schema, "test", "Dup").unwrap();
+        let msg = &fd.message_type[0];
+
+        assert_eq!(msg.nested_type.len(), 2);
+        let names: Vec<_> = msg
+            .nested_type
+            .iter()
+            .map(|m| m.name.as_deref().unwrap())
+            .collect();
+        // Second one should be disambiguated.
+        assert_eq!(names[0], "FooBar");
+        assert_eq!(names[1], "FooBar2");
+    }
+
+    #[test]
+    fn test_reserved_field_numbers_skipped() {
+        // Verify that assign_field_number skips 19000–19999.
+        assert_eq!(assign_field_number(18998, "M").unwrap(), 18999);
+        // Index 18999 would be field 19000, which is reserved → should jump.
+        let n = assign_field_number(18999, "M").unwrap();
+        assert_eq!(n, 20000);
+        let n = assign_field_number(19000, "M").unwrap();
+        assert_eq!(n, 20001);
     }
 
     #[test]
@@ -607,7 +770,11 @@ mod tests {
         use prost_reflect::DescriptorPool;
 
         let schema = Schema::new(vec![
-            Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
             Field::new("dur", DataType::Duration(TimeUnit::Nanosecond), false),
         ]);
 
@@ -639,7 +806,11 @@ mod tests {
             false,
         );
         let schema = Schema::new(vec![
-            Field::new("tags", DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))), false),
+            Field::new(
+                "tags",
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+                false,
+            ),
             Field::new("counts", DataType::Map(Arc::new(entries), false), false),
         ]);
 

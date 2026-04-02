@@ -75,6 +75,21 @@ Without it, only IPC input is available.
 | Proto JSON | `--out-format proto-jsonl` | Newline-delimited JSON |
 | Arrow IPC | `--out-format arrow-ipc` | BinaryArray column in IPC stream |
 
+### Generate a proto descriptor from Arrow data
+
+```bash
+# From a DuckDB query
+apb generate \
+  --query "SELECT * FROM read_parquet('data.parquet') LIMIT 0" \
+  --package mypackage \
+  --message MyMessage \
+  --out schema.bin
+
+# From Arrow IPC — then use the generated descriptor to transcode
+cat data.arrow | apb generate --ipc - --package mypackage --message MyMessage --out schema.bin
+apb transcode --descriptor schema.bin --message mypackage.MyMessage --ipc data.arrow
+```
+
 ### Flags
 
 | Flag | Description |
@@ -102,6 +117,15 @@ transcoder.transcode_delimited(&batch, &mut output)?;
 ```
 
 `Transcoder` takes `&self` — it is `Sync` and can be shared across threads.
+
+### Generating a descriptor from Arrow
+
+```rust
+use apb_core::generate::generate_file_descriptor;
+
+let fd = generate_file_descriptor(&arrow_schema, "mypackage", "MyMessage")?;
+// fd is a prost_types::FileDescriptorProto — serialize, load into a pool, etc.
+```
 
 ## Schema mapping
 
@@ -221,7 +245,6 @@ which row, which field, what went wrong, and what was expected.
 
 ## Future
 
-- `apb generate` — Arrow schema → proto descriptor/IDL generation
 - C ABI (`apb-cabi` crate) for embedding in non-Rust applications
 - Proto → Arrow reverse transcoding (decode)
 

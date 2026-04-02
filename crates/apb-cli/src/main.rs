@@ -242,9 +242,7 @@ fn run_generate(
 
     let fd = generate_file_descriptor(&input.schema, &package, &message)?;
 
-    let fds = prost_reflect::prost_types::FileDescriptorSet {
-        file: vec![fd],
-    };
+    let fds = prost_reflect::prost_types::FileDescriptorSet { file: vec![fd] };
 
     let bytes = prost_reflect::prost::Message::encode_to_vec(&fds);
 

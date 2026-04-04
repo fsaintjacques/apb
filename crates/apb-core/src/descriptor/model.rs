@@ -34,11 +34,14 @@ impl ProtoSchema {
         // extension data in field options (unlike from_file_descriptor_set
         // which goes through prost_types and strips unknown fields).
         //
-        // First load the apb extension so custom options are resolvable.
-        let mut pool = DescriptorPool::new();
+        // Start from the global pool which includes Google well-known types
+        // (Timestamp, Duration, etc.) so descriptors that import them work
+        // without requiring --include_imports.
+        let mut pool = DescriptorPool::global();
+        // Load the apb extension so custom options are resolvable.
         pool.decode_file_descriptor_set(APB_EXTENSION_BYTES)?;
-        // Then add user descriptors. If they already include apb.proto
-        // (via --include_imports), the duplicate file is silently skipped.
+        // Then add user descriptors. If they already include well-known types
+        // or apb.proto (via --include_imports), duplicates are silently skipped.
         pool.decode_file_descriptor_set(bytes)?;
         Ok(Self { pool })
     }
@@ -185,5 +188,44 @@ mod tests {
     fn inner_message_reachable() {
         let schema = ProtoSchema::from_bytes(NESTED_BIN).unwrap();
         assert!(schema.message("fixtures.Inner").is_ok());
+    }
+
+    /// Descriptors that import well-known types (e.g. google.protobuf.Timestamp)
+    /// without embedding them must still load successfully, since the pool is
+    /// seeded with the global well-known type definitions.
+    #[test]
+    fn well_known_type_imports_resolve() {
+        use prost::Message;
+        use prost_types::{
+            field_descriptor_proto::{Label, Type},
+            DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+        };
+
+        let fd = FileDescriptorProto {
+            name: Some("test.proto".to_string()),
+            package: Some("test".to_string()),
+            syntax: Some("proto3".to_string()),
+            dependency: vec!["google/protobuf/timestamp.proto".to_string()],
+            message_type: vec![DescriptorProto {
+                name: Some("Row".to_string()),
+                field: vec![FieldDescriptorProto {
+                    name: Some("created_at".to_string()),
+                    number: Some(1),
+                    label: Some(Label::Optional as i32),
+                    r#type: Some(Type::Message as i32),
+                    type_name: Some(".google.protobuf.Timestamp".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bytes = FileDescriptorSet { file: vec![fd] }.encode_to_vec();
+
+        let schema = ProtoSchema::from_bytes(&bytes).unwrap();
+        let msg = schema.message("test.Row").unwrap();
+        let field = msg.get_field_by_name("created_at").unwrap();
+        assert!(matches!(field.kind(), Kind::Message(_)));
     }
 }

@@ -7,7 +7,7 @@ export DUCKDB_INC_DIR
 CARGO_FLAGS ?=
 FEATURES ?= duckdb
 
-.PHONY: build release test lint format check clean
+.PHONY: build release test lint format check-format check-lint check clean
 
 build:
 	cargo build --features $(FEATURES) $(CARGO_FLAGS)
@@ -19,13 +19,18 @@ test:
 	cargo test --features $(FEATURES) $(CARGO_FLAGS)
 
 lint:
-	cargo clippy --features $(FEATURES) $(CARGO_FLAGS) -- -D warnings
+	cargo clippy --features $(FEATURES) $(CARGO_FLAGS) --fix --allow-dirty -- -D warnings
 
 format:
 	cargo fmt
 
-check: format lint test
-	@echo "All checks passed."
+check-format:
+	cargo fmt --check
+
+check-lint:
+	cargo clippy --features $(FEATURES) $(CARGO_FLAGS) -- -D warnings
+
+check: check-format check-lint test
 
 clean:
 	cargo clean

@@ -326,6 +326,8 @@ fn is_scalar(dt: &DataType) -> bool {
             | DataType::LargeUtf8
             | DataType::Binary
             | DataType::LargeBinary
+            | DataType::Date32
+            | DataType::Date64
     )
 }
 
@@ -340,6 +342,8 @@ fn scalar_to_proto_type(dt: &DataType, field_name: &str) -> Result<Type, Generat
         DataType::Float64 => Ok(Type::Double),
         DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::String),
         DataType::Binary | DataType::LargeBinary => Ok(Type::Bytes),
+        DataType::Date32 => Ok(Type::Int32),
+        DataType::Date64 => Ok(Type::Int64),
         _ => Err(GenerateError::UnsupportedType {
             field_name: field_name.to_string(),
             arrow_type: dt.clone(),
@@ -422,6 +426,18 @@ mod tests {
         let msg = &fd.message_type[0];
         assert_eq!(msg.field[0].r#type, Some(Type::String as i32));
         assert_eq!(msg.field[1].r#type, Some(Type::Bytes as i32));
+    }
+
+    #[test]
+    fn test_date32_and_date64() {
+        let schema = Schema::new(vec![
+            Field::new("d32", DataType::Date32, false),
+            Field::new("d64", DataType::Date64, false),
+        ]);
+        let fd = generate_file_descriptor(&schema, "test", "Dates").unwrap();
+        let msg = &fd.message_type[0];
+        assert_eq!(msg.field[0].r#type, Some(Type::Int32 as i32));
+        assert_eq!(msg.field[1].r#type, Some(Type::Int64 as i32));
     }
 
     #[test]

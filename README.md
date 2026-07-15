@@ -96,6 +96,8 @@ apb transcode --descriptor schema.bin --message mypackage.MyMessage --ipc data.a
 |------|-------------|
 | `--coerce` | Enable all type coercions (e.g. string → enum) |
 | `--unknown-enum error\|default\|skip` | Behavior for unknown enum strings |
+| `--any-pack FIELD=MESSAGE` | Pack a `google.protobuf.Any` field from a struct column (repeatable) |
+| `--any-url-prefix PREFIX` | type_url prefix for packed Any fields (default `type.googleapis.com`) |
 | `-v` / `-vv` | Verbose logging (info / debug) |
 | `--strict` | (validate) Promote unmapped field warnings to errors |
 | `--format json` | (validate) Output report as JSON for CI |
@@ -207,6 +209,46 @@ Supported at arbitrary depth:
 A proto `oneof` maps to an Arrow `StructArray` named after the oneof group.
 Each child column corresponds to a variant. The transcoder validates that at
 most one child is non-null per row.
+
+## google.protobuf.Any
+
+An `Any` field binds to exactly one Arrow Struct column, in one of two forms:
+
+**Packed (the common case).** Declare the payload message and apb performs
+the double serialization: the struct's children map onto the payload message
+with the normal rules, each row is serialized and wrapped in an `Any` with a
+derived `type_url` — the data never contains URLs or pre-encoded bytes.
+
+```proto
+import "google/protobuf/any.proto";
+
+message Event {
+  string event_id = 1;
+  google.protobuf.Any payload = 2 [(apb.apb).any_pack = "my.pkg.OrderPlaced"];
+}
+```
+
+The Arrow side is just `payload: Struct<order_id: Utf8, amount_cents: Int64>`.
+Callers who can't modify the proto use `--any-pack
+my.pkg.Event.payload=my.pkg.OrderPlaced` (or `InferOptions::any_pack`), which
+overrides the annotation. The `type_url` becomes
+`type.googleapis.com/my.pkg.OrderPlaced` (`--any-url-prefix` overrides the
+prefix). An envelope can carry any number of packed Any fields, and packed
+Any composes in repeated, map-value, and oneof positions.
+
+Note: `Any` does not import its payload type, so the payload proto must be
+compiled into the descriptor set (importing it from the envelope proto is the
+easiest way). If the payload message only exists as an Arrow schema, generate
+it first with `apb generate`.
+
+**Raw (heterogeneous data only).** With no `any_pack` declaration, the column
+must be exactly `Struct<type_url: Utf8, value: Binary>` — an unverified
+passthrough of already-serialized payloads. Any other shape is a mapping
+error.
+
+Null semantics: a null struct omits the field; a non-null struct with all
+children null encodes an empty but typed payload (`type_url` set, empty
+`value`).
 
 ## Architecture
 

@@ -99,6 +99,12 @@ specially. `prost_reflect::DescriptorPool::global()` includes these
 descriptors. The `ProtoSchema::from_bytes` constructor uses a fresh pool
 (not global), but embeds the `apb.proto` extension automatically.
 
+`google.protobuf.Any` binds to a single Struct column in one of two forms
+(doc/plans/plan-07-any-packing.md): packed — an `(apb).any_pack` annotation
+or `InferOptions::any_pack` override names the payload message, the struct
+serializes as that message and wraps in an Any with a derived type_url — or
+raw, an exact `Struct<type_url: Utf8, value: Binary>` passthrough.
+
 When working with generated descriptors that reference well-known types,
 use `DescriptorPool::global()` as the base pool rather than
 `ProtoSchema::from_bytes`.

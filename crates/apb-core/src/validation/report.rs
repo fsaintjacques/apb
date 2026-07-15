@@ -59,6 +59,8 @@ pub enum FieldShapeSummary {
     Repeated,
     Map,
     Message,
+    /// google.protobuf.Any packed from a typed struct column.
+    AnyPacked,
     Oneof,
 }
 
@@ -125,7 +127,11 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
             arrow_index: binding.arrow_index,
             proto_name: binding.proto_name.clone(),
             proto_number: binding.proto_number,
-            proto_type: format_proto_kind(&binding.type_check.proto_kind, &shape),
+            proto_type: proto_type_for(
+                &binding.field_shape,
+                &binding.type_check.proto_kind,
+                &shape,
+            ),
             bind_method: format_bind_method(&binding.bind_method),
             type_mode: format_type_mode(&binding.type_check.mode),
             field_shape: shape,
@@ -145,7 +151,11 @@ pub(crate) fn report_from_mapping(mapping: &FieldMapping) -> MappingReport {
                 arrow_index: oneof.arrow_index,
                 proto_name: variant.proto_name.clone(),
                 proto_number: variant.proto_number,
-                proto_type: format_proto_kind(&variant.type_check.proto_kind, &shape),
+                proto_type: proto_type_for(
+                    &variant.field_shape,
+                    &variant.type_check.proto_kind,
+                    &shape,
+                ),
                 bind_method: "oneof".to_string(),
                 type_mode: format_type_mode(&variant.type_check.mode),
                 field_shape: shape,
@@ -249,6 +259,26 @@ pub(crate) fn format_proto_kind(kind: &prost_reflect::Kind, shape: &FieldShapeSu
     }
 }
 
+/// Display type for a binding, carrying Any-specific detail the plain
+/// proto kind cannot express (packed target, raw passthrough).
+fn proto_type_for(
+    shape: &FieldShape,
+    kind: &prost_reflect::Kind,
+    summary: &FieldShapeSummary,
+) -> String {
+    match shape {
+        FieldShape::AnyPacked { type_url, .. } => format!("Any[{type_url}]"),
+        FieldShape::Message(inner) if inner.message_name == "google.protobuf.Any" => {
+            "Any (raw passthrough, value bytes unverified)".to_string()
+        }
+        FieldShape::Repeated { element_shape, .. } => match element_shape.as_ref() {
+            FieldShape::AnyPacked { type_url, .. } => format!("repeated Any[{type_url}]"),
+            _ => format_proto_kind(kind, summary),
+        },
+        _ => format_proto_kind(kind, summary),
+    }
+}
+
 fn summarize_shape(
     shape: &FieldShape,
     proto_name: &str,
@@ -261,6 +291,10 @@ fn summarize_shape(
                     proto_field: format!("{}[]", proto_name),
                     report: Box::new(report_from_mapping(sub_mapping)),
                 }),
+                FieldShape::AnyPacked { inner, .. } => Some(NestedReport {
+                    proto_field: format!("{}[]", proto_name),
+                    report: Box::new(report_from_mapping(inner)),
+                }),
                 _ => None,
             };
             (FieldShapeSummary::Repeated, sub)
@@ -270,6 +304,10 @@ fn summarize_shape(
                 FieldShape::Message(sub_mapping) => Some(NestedReport {
                     proto_field: format!("{}[value]", proto_name),
                     report: Box::new(report_from_mapping(sub_mapping)),
+                }),
+                FieldShape::AnyPacked { inner, .. } => Some(NestedReport {
+                    proto_field: format!("{}[value]", proto_name),
+                    report: Box::new(report_from_mapping(inner)),
                 }),
                 _ => None,
             };
@@ -282,12 +320,12 @@ fn summarize_shape(
             };
             (FieldShapeSummary::Message, Some(sub))
         }
-        FieldShape::AnyPacked { type_url, inner } => {
+        FieldShape::AnyPacked { inner, .. } => {
             let sub = NestedReport {
-                proto_field: format!("{proto_name} → Any[{type_url}]"),
+                proto_field: proto_name.to_string(),
                 report: Box::new(report_from_mapping(inner)),
             };
-            (FieldShapeSummary::Message, Some(sub))
+            (FieldShapeSummary::AnyPacked, Some(sub))
         }
     }
 }

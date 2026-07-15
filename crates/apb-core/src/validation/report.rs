@@ -282,6 +282,13 @@ fn summarize_shape(
             };
             (FieldShapeSummary::Message, Some(sub))
         }
+        FieldShape::AnyPacked { type_url, inner } => {
+            let sub = NestedReport {
+                proto_field: format!("{proto_name} → Any[{type_url}]"),
+                report: Box::new(report_from_mapping(inner)),
+            };
+            (FieldShapeSummary::Message, Some(sub))
+        }
     }
 }
 

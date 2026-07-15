@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use arrow_schema::{DataType, Fields, Schema};
 use prost_reflect::{Cardinality, FieldDescriptor, Kind, MessageDescriptor};
@@ -7,6 +7,9 @@ use super::model::*;
 use crate::types::{
     check_compatibility, resolve_type_check, TypeCheck, TypeCheckMode, TypeCompatibility,
 };
+
+/// Fully qualified name of the google.protobuf.Any message.
+const ANY_FULL_NAME: &str = "google.protobuf.Any";
 
 /// Options for infer mode.
 #[derive(Debug, Clone)]
@@ -18,6 +21,13 @@ pub struct InferOptions {
     /// If true, allow type coercions globally (default: false).
     /// Overrides per-field annotation — all fields get coercion enabled.
     pub coerce_all: bool,
+    /// Payload message names for packed `google.protobuf.Any` fields, keyed
+    /// by fully qualified proto field name (e.g. `"my.pkg.Event.payload"`).
+    /// Overrides the `(apb).any_pack` annotation.
+    pub any_pack: HashMap<String, String>,
+    /// type_url prefix for packed Any fields (default: `type.googleapis.com`).
+    /// Trailing slashes are trimmed; the trimmed prefix must be non-empty.
+    pub any_url_prefix: String,
 }
 
 impl Default for InferOptions {
@@ -26,6 +36,8 @@ impl Default for InferOptions {
             allow_unmapped_proto: true,
             allow_unmapped_arrow: true,
             coerce_all: false,
+            any_pack: HashMap::new(),
+            any_url_prefix: "type.googleapis.com".to_string(),
         }
     }
 }
@@ -33,33 +45,43 @@ impl Default for InferOptions {
 /// The fully qualified name of the apb extension.
 const APB_EXTENSION_NAME: &str = "apb.apb";
 
+/// Parsed apb annotations from a proto field descriptor.
+#[derive(Debug, Default)]
+struct ApbAnnotations {
+    /// Explicit Arrow column name override.
+    arrow_name: Option<String>,
+    /// Coercion enabled for this field.
+    coerce: bool,
+    /// Payload message name for a packed google.protobuf.Any field.
+    any_pack: Option<String>,
+}
+
 /// Read apb annotations from a proto field descriptor.
-/// Returns (arrow_name_override, coerce_allowed).
-fn read_apb_annotations(field: &FieldDescriptor) -> (Option<String>, bool) {
+fn read_apb_annotations(field: &FieldDescriptor) -> ApbAnnotations {
     let options = field.options();
 
     // Find the apb extension descriptor in the pool.
     let pool = field.parent_pool();
     let Some(ext) = pool.get_extension_by_name(APB_EXTENSION_NAME) else {
-        return (None, false);
+        return ApbAnnotations::default();
     };
 
     if !options.has_extension(&ext) {
-        return (None, false);
+        return ApbAnnotations::default();
     }
 
     let apb_value = options.get_extension(&ext);
     let msg = match apb_value.as_ref() {
         prost_reflect::Value::Message(m) => m,
-        _ => return (None, false),
+        _ => return ApbAnnotations::default(),
     };
 
-    let arrow_name = msg
-        .get_field_by_name("arrow_name")
-        .and_then(|v| match v.as_ref() {
+    let non_empty_string = |name: &str| {
+        msg.get_field_by_name(name).and_then(|v| match v.as_ref() {
             prost_reflect::Value::String(s) if !s.is_empty() => Some(s.clone()),
             _ => None,
-        });
+        })
+    };
 
     let coerce = msg
         .get_field_by_name("coerce")
@@ -69,7 +91,21 @@ fn read_apb_annotations(field: &FieldDescriptor) -> (Option<String>, bool) {
         })
         .unwrap_or(false);
 
-    (arrow_name, coerce)
+    ApbAnnotations {
+        arrow_name: non_empty_string("arrow_name"),
+        coerce,
+        any_pack: non_empty_string("any_pack"),
+    }
+}
+
+/// The declared any_pack target for a field, if any. The caller-side option
+/// (keyed by fully qualified field name) overrides the annotation.
+fn any_pack_declaration(proto_field: &FieldDescriptor, options: &InferOptions) -> Option<String> {
+    options
+        .any_pack
+        .get(proto_field.full_name())
+        .cloned()
+        .or_else(|| read_apb_annotations(proto_field).any_pack)
 }
 
 /// Infer a mapping from an Arrow schema and a proto message descriptor.
@@ -181,11 +217,11 @@ fn infer_field(
     bound_indices: &mut HashSet<usize>,
     options: &InferOptions,
 ) -> Result<Option<FieldBinding>, MappingError> {
-    let (annotation_name, field_coerce) = read_apb_annotations(proto_field);
-    let coerce = field_coerce || options.coerce_all;
+    let annotations = read_apb_annotations(proto_field);
+    let coerce = annotations.coerce || options.coerce_all;
 
     // Step 1: find the Arrow field — annotation takes priority over name-match.
-    let (arrow_index, arrow_field, bind_method) = if let Some(ref name) = annotation_name {
+    let (arrow_index, arrow_field, bind_method) = if let Some(ref name) = annotations.arrow_name {
         match arrow_fields
             .iter()
             .enumerate()
@@ -240,6 +276,26 @@ fn resolve_field_shape(
     coerce: bool,
     options: &InferOptions,
 ) -> Result<(TypeCheck, FieldShape), MappingError> {
+    // An any_pack declaration is only valid on google.protobuf.Any fields
+    // (including repeated Any and map values of Any).
+    if let Some(target) = any_pack_declaration(proto_field, options) {
+        let value_kind = if proto_field.is_map() {
+            match proto_field.kind() {
+                Kind::Message(entry) => entry.map_entry_value_field().kind(),
+                _ => unreachable!("map field should have Message kind"),
+            }
+        } else {
+            proto_field.kind()
+        };
+        let is_any = matches!(value_kind, Kind::Message(ref m) if m.full_name() == ANY_FULL_NAME);
+        if !is_any {
+            return Err(MappingError::AnyPackOnNonAnyField {
+                proto_field: proto_field.name().to_string(),
+                target,
+            });
+        }
+    }
+
     if proto_field.is_map() {
         return resolve_map(arrow_type, proto_field, coerce, options);
     }
@@ -261,7 +317,7 @@ fn resolve_field_shape(
             }
 
             // Otherwise, it's a nested message — Arrow side must be a Struct.
-            resolve_nested_message(arrow_type, &msg_desc, proto_field.name(), options)
+            resolve_nested_message(arrow_type, &msg_desc, proto_field, options)
         }
         _ => {
             let tc = resolve_type_check(arrow_type, &proto_field.kind(), coerce)?;
@@ -270,17 +326,25 @@ fn resolve_field_shape(
     }
 }
 
+/// Resolve a message-kind binding. `proto_field` is the field whose
+/// annotations govern the binding; for map values it is the map field itself
+/// (the synthetic entry value field carries no options), so `msg_desc` is
+/// passed separately rather than derived from the field's kind.
 fn resolve_nested_message(
     arrow_type: &DataType,
     msg_desc: &MessageDescriptor,
-    proto_field_name: &str,
+    proto_field: &FieldDescriptor,
     options: &InferOptions,
 ) -> Result<(TypeCheck, FieldShape), MappingError> {
+    if msg_desc.full_name() == ANY_FULL_NAME {
+        return resolve_any(arrow_type, msg_desc, proto_field, options);
+    }
+
     let struct_fields = match arrow_type {
         DataType::Struct(fields) => fields,
         _ => {
             return Err(MappingError::TypeShapeMismatch {
-                field_name: proto_field_name.to_string(),
+                field_name: proto_field.name().to_string(),
                 expected: "Struct".to_string(),
                 actual: format!("{arrow_type}"),
             });
@@ -289,7 +353,7 @@ fn resolve_nested_message(
 
     let sub_mapping =
         infer_from_fields(struct_fields, msg_desc, options).map_err(|e| MappingError::Nested {
-            proto_field: proto_field_name.to_string(),
+            proto_field: proto_field.name().to_string(),
             source: Box::new(e),
         })?;
 
@@ -301,6 +365,120 @@ fn resolve_nested_message(
     };
 
     Ok((tc, FieldShape::Message(Box::new(sub_mapping))))
+}
+
+/// Resolve a google.protobuf.Any binding: packed if an any_pack target is
+/// declared (annotation or caller option), raw passthrough otherwise.
+fn resolve_any(
+    arrow_type: &DataType,
+    any_desc: &MessageDescriptor,
+    proto_field: &FieldDescriptor,
+    options: &InferOptions,
+) -> Result<(TypeCheck, FieldShape), MappingError> {
+    match any_pack_declaration(proto_field, options) {
+        Some(target) => resolve_any_packed(arrow_type, any_desc, proto_field, &target, options),
+        None => resolve_any_raw(arrow_type, any_desc, proto_field, options),
+    }
+}
+
+/// Packed form: the struct column serializes as the payload message and is
+/// wrapped in an Any with a derived type_url.
+fn resolve_any_packed(
+    arrow_type: &DataType,
+    any_desc: &MessageDescriptor,
+    proto_field: &FieldDescriptor,
+    target: &str,
+    options: &InferOptions,
+) -> Result<(TypeCheck, FieldShape), MappingError> {
+    let prefix = options.any_url_prefix.trim_end_matches('/');
+    if prefix.is_empty() {
+        return Err(MappingError::InvalidAnyUrlPrefix {
+            prefix: options.any_url_prefix.clone(),
+        });
+    }
+
+    let payload = proto_field
+        .parent_pool()
+        .get_message_by_name(target)
+        .ok_or_else(|| MappingError::AnyPackTargetNotFound {
+            proto_field: proto_field.name().to_string(),
+            target: target.to_string(),
+        })?;
+
+    let struct_fields = match arrow_type {
+        DataType::Struct(fields) => fields,
+        _ => {
+            return Err(MappingError::TypeShapeMismatch {
+                field_name: proto_field.name().to_string(),
+                expected: "Struct".to_string(),
+                actual: format!("{arrow_type}"),
+            });
+        }
+    };
+
+    let inner =
+        infer_from_fields(struct_fields, &payload, options).map_err(|e| MappingError::Nested {
+            proto_field: proto_field.name().to_string(),
+            source: Box::new(e),
+        })?;
+
+    let tc = TypeCheck {
+        arrow_type: arrow_type.clone(),
+        proto_kind: Kind::Message(any_desc.clone()),
+        mode: TypeCheckMode::Direct,
+    };
+
+    Ok((
+        tc,
+        FieldShape::AnyPacked {
+            type_url: format!("{prefix}/{}", payload.full_name()),
+            inner: Box::new(inner),
+        },
+    ))
+}
+
+/// Raw form: unverified passthrough of already-serialized payloads. The
+/// Arrow side must be exactly `Struct<type_url: Utf8, value: Binary>`.
+fn resolve_any_raw(
+    arrow_type: &DataType,
+    any_desc: &MessageDescriptor,
+    proto_field: &FieldDescriptor,
+    options: &InferOptions,
+) -> Result<(TypeCheck, FieldShape), MappingError> {
+    let mismatch = |actual: String| MappingError::AnyRawShapeMismatch {
+        proto_field: proto_field.name().to_string(),
+        actual,
+    };
+
+    let struct_fields = match arrow_type {
+        DataType::Struct(fields) => fields,
+        _ => return Err(mismatch(format!("{arrow_type}"))),
+    };
+
+    let has_type_url = struct_fields.iter().any(|f| {
+        f.name() == "type_url" && matches!(f.data_type(), DataType::Utf8 | DataType::LargeUtf8)
+    });
+    let has_value = struct_fields.iter().any(|f| {
+        f.name() == "value" && matches!(f.data_type(), DataType::Binary | DataType::LargeBinary)
+    });
+    if struct_fields.len() != 2 || !has_type_url || !has_value {
+        return Err(mismatch(format!("{arrow_type}")));
+    }
+
+    // The canonical shape maps through the generic nested-message path.
+    let inner =
+        infer_from_fields(struct_fields, any_desc, options).map_err(|e| MappingError::Nested {
+            proto_field: proto_field.name().to_string(),
+            source: Box::new(e),
+        })?;
+
+    let tc = TypeCheck {
+        arrow_type: arrow_type.clone(),
+        proto_kind: Kind::Message(any_desc.clone()),
+        mode: TypeCheckMode::Direct,
+    };
+
+    Ok((tc, FieldShape::Message(Box::new(inner))))
 }
 
 fn resolve_repeated(
@@ -331,7 +509,7 @@ fn resolve_repeated(
                 let tc = resolve_type_check(element_type, &proto_field.kind(), coerce)?;
                 (tc, FieldShape::Scalar)
             } else {
-                resolve_nested_message(element_type, &msg_desc, proto_field.name(), options)?
+                resolve_nested_message(element_type, &msg_desc, proto_field, options)?
             }
         }
         _ => {
@@ -405,7 +583,7 @@ fn resolve_map(
                 let tc = resolve_type_check(value_type, &value_field.kind(), coerce)?;
                 (tc, FieldShape::Scalar)
             } else {
-                resolve_nested_message(value_type, &msg_desc, proto_field.name(), options)?
+                resolve_nested_message(value_type, &msg_desc, proto_field, options)?
             }
         }
         _ => {
@@ -472,7 +650,7 @@ fn infer_oneof(
             .enumerate()
             .find(|(_, f)| f.name() == variant_field.name())
         {
-            let (_, coerce) = read_apb_annotations(&variant_field);
+            let coerce = read_apb_annotations(&variant_field).coerce;
             let (tc, shape) =
                 resolve_field_shape(child_field.data_type(), &variant_field, coerce, options)?;
             variants.push(OneofVariant {

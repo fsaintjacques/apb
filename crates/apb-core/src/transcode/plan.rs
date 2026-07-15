@@ -220,6 +220,11 @@ fn build_encoder_kind(
             let tag = wire::encode_tag(proto_number, wire::WIRE_LENGTH_DELIMITED);
             Ok((FieldEncoderKind::Message(MessageEncoder { sub_plan }), tag))
         }
+        // Packed Any encoder lands with the encoding stage of plan 07.
+        FieldShape::AnyPacked { .. } => Err(PlanError::NoEncoder {
+            arrow_type: format!("{arrow_type}"),
+            proto_type: "google.protobuf.Any (packed)".to_string(),
+        }),
         FieldShape::Repeated {
             element_type_check,
             element_shape,

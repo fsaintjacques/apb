@@ -108,6 +108,7 @@ fn infer_disallow_unmapped_proto() {
         coerce_all: false,
         allow_unmapped_proto: false,
         allow_unmapped_arrow: true,
+        ..InferOptions::default()
     };
 
     let result = infer_mapping(&arrow_schema, &msg, &options);
@@ -131,6 +132,7 @@ fn infer_disallow_unmapped_arrow() {
         coerce_all: false,
         allow_unmapped_proto: true,
         allow_unmapped_arrow: false,
+        ..InferOptions::default()
     };
 
     let result = infer_mapping(&arrow_schema, &msg, &options);
@@ -623,4 +625,305 @@ fn infer_annotation_priority_over_name() {
 
     // "user_id" Arrow column should be unmapped.
     assert!(mapping.unmapped_arrow.iter().any(|u| u.name == "user_id"));
+}
+
+// ==================== Infer: google.protobuf.Any ====================
+
+const ANY_BIN: &[u8] = include_bytes!("../../fixtures/any.bin");
+
+fn any_schema() -> ProtoSchema {
+    ProtoSchema::from_bytes(ANY_BIN).unwrap()
+}
+
+fn order_placed_struct() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("order_id", DataType::Utf8, true),
+        Field::new("amount_cents", DataType::Int64, true),
+    ]))
+}
+
+fn request_context_struct() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new(
+            "received_at",
+            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new(
+            "origin",
+            DataType::Struct(Fields::from(vec![
+                Field::new("service", DataType::Utf8, true),
+                Field::new("region", DataType::Int32, true),
+            ])),
+            true,
+        ),
+    ]))
+}
+
+fn raw_any_struct() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("type_url", DataType::Utf8, true),
+        Field::new("value", DataType::Binary, true),
+    ]))
+}
+
+#[test]
+fn infer_any_packed_via_annotation() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new("payload", order_placed_struct(), true)]);
+    let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
+
+    assert_eq!(mapping.bindings.len(), 1);
+    let binding = &mapping.bindings[0];
+    assert_eq!(binding.proto_name, "payload");
+    match &binding.field_shape {
+        FieldShape::AnyPacked { type_url, inner } => {
+            assert_eq!(type_url, "type.googleapis.com/fixtures.OrderPlaced");
+            assert_eq!(inner.message_name, "fixtures.OrderPlaced");
+            assert_eq!(inner.bindings.len(), 2);
+        }
+        other => panic!("expected AnyPacked, got {other:?}"),
+    }
+    // TypeCheck follows the nested-message precedent.
+    assert!(matches!(
+        binding.type_check.proto_kind,
+        prost_reflect::Kind::Message(ref d) if d.full_name() == "google.protobuf.Any"
+    ));
+    assert!(matches!(
+        binding.type_check.mode,
+        crate::types::TypeCheckMode::Direct
+    ));
+}
+
+#[test]
+fn infer_any_packed_multiple_fields() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![
+        Field::new("event_id", DataType::Utf8, false),
+        Field::new("payload", order_placed_struct(), true),
+        Field::new("context", request_context_struct(), true),
+    ]);
+    let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
+
+    assert_eq!(mapping.bindings.len(), 3);
+
+    let context = mapping
+        .bindings
+        .iter()
+        .find(|b| b.proto_name == "context")
+        .unwrap();
+    match &context.field_shape {
+        FieldShape::AnyPacked { type_url, inner } => {
+            assert_eq!(type_url, "type.googleapis.com/fixtures.RequestContext");
+            // received_at (WKT), trace_id, origin (nested message) all bind.
+            assert_eq!(inner.bindings.len(), 3);
+        }
+        other => panic!("expected AnyPacked, got {other:?}"),
+    }
+}
+
+#[test]
+fn infer_any_packed_option_overrides_annotation() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    // payload is annotated with OrderPlaced; override to RequestContext.
+    let mut options = InferOptions::default();
+    options.any_pack.insert(
+        "fixtures.Envelope.payload".to_string(),
+        "fixtures.RequestContext".to_string(),
+    );
+
+    let arrow_schema = Schema::new(vec![Field::new("payload", request_context_struct(), true)]);
+    let mapping = infer_mapping(&arrow_schema, &msg, &options).unwrap();
+
+    match &mapping.bindings[0].field_shape {
+        FieldShape::AnyPacked { type_url, .. } => {
+            assert_eq!(type_url, "type.googleapis.com/fixtures.RequestContext");
+        }
+        other => panic!("expected AnyPacked, got {other:?}"),
+    }
+}
+
+#[test]
+fn infer_any_packed_repeated() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new(
+        "events",
+        DataType::List(Arc::new(Field::new("item", order_placed_struct(), true))),
+        true,
+    )]);
+    let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
+
+    match &mapping.bindings[0].field_shape {
+        FieldShape::Repeated { element_shape, .. } => match element_shape.as_ref() {
+            FieldShape::AnyPacked { type_url, .. } => {
+                assert_eq!(type_url, "type.googleapis.com/fixtures.OrderPlaced");
+            }
+            other => panic!("expected AnyPacked element, got {other:?}"),
+        },
+        other => panic!("expected Repeated, got {other:?}"),
+    }
+}
+
+#[test]
+fn infer_any_pack_target_not_found() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let mut options = InferOptions::default();
+    options.any_pack.insert(
+        "fixtures.Envelope.payload".to_string(),
+        "fixtures.DoesNotExist".to_string(),
+    );
+
+    let arrow_schema = Schema::new(vec![Field::new("payload", order_placed_struct(), true)]);
+    let err = infer_mapping(&arrow_schema, &msg, &options).unwrap_err();
+    assert!(matches!(
+        err,
+        MappingError::AnyPackTargetNotFound { ref target, .. } if target == "fixtures.DoesNotExist"
+    ));
+    // The message should hint at compiling the payload proto in.
+    assert!(err.to_string().contains("descriptor set"));
+}
+
+#[test]
+fn infer_any_pack_on_non_any_field() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let mut options = InferOptions::default();
+    options.any_pack.insert(
+        "fixtures.Envelope.event_id".to_string(),
+        "fixtures.OrderPlaced".to_string(),
+    );
+
+    let arrow_schema = Schema::new(vec![Field::new("event_id", DataType::Utf8, false)]);
+    let err = infer_mapping(&arrow_schema, &msg, &options).unwrap_err();
+    assert!(matches!(
+        err,
+        MappingError::AnyPackOnNonAnyField { ref proto_field, .. } if proto_field == "event_id"
+    ));
+}
+
+#[test]
+fn infer_any_packed_non_struct_column() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new("payload", DataType::Utf8, true)]);
+    let err = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        MappingError::TypeShapeMismatch { ref expected, .. } if expected == "Struct"
+    ));
+}
+
+#[test]
+fn infer_any_packed_inner_error_wrapped() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    // order_id is proto string; Boolean has no mapping.
+    let bad_struct = DataType::Struct(Fields::from(vec![Field::new(
+        "order_id",
+        DataType::Boolean,
+        true,
+    )]));
+    let arrow_schema = Schema::new(vec![Field::new("payload", bad_struct, true)]);
+    let err = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        MappingError::Nested { ref proto_field, .. } if proto_field == "payload"
+    ));
+}
+
+#[test]
+fn infer_any_url_prefix_normalization() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+    let arrow_schema = Schema::new(vec![Field::new("payload", order_placed_struct(), true)]);
+
+    // Trailing slashes are trimmed.
+    let mut options = InferOptions::default();
+    options.any_url_prefix = "example.com/".to_string();
+    let mapping = infer_mapping(&arrow_schema, &msg, &options).unwrap();
+    match &mapping.bindings[0].field_shape {
+        FieldShape::AnyPacked { type_url, .. } => {
+            assert_eq!(type_url, "example.com/fixtures.OrderPlaced");
+        }
+        other => panic!("expected AnyPacked, got {other:?}"),
+    }
+
+    // Empty (or slash-only) prefix is rejected.
+    for prefix in ["", "/"] {
+        let mut options = InferOptions::default();
+        options.any_url_prefix = prefix.to_string();
+        let err = infer_mapping(&arrow_schema, &msg, &options).unwrap_err();
+        assert!(matches!(err, MappingError::InvalidAnyUrlPrefix { .. }));
+    }
+}
+
+#[test]
+fn infer_any_raw_canonical_shape() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new("raw", raw_any_struct(), true)]);
+    let mapping = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap();
+
+    assert_eq!(mapping.bindings.len(), 1);
+    match &mapping.bindings[0].field_shape {
+        FieldShape::Message(inner) => {
+            assert_eq!(inner.message_name, "google.protobuf.Any");
+            assert_eq!(inner.bindings.len(), 2);
+        }
+        other => panic!("expected Message, got {other:?}"),
+    }
+}
+
+#[test]
+fn infer_any_raw_wrong_shape() {
+    let schema = any_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let wrong_shapes = vec![
+        // Not a struct.
+        DataType::Utf8,
+        // Missing value.
+        DataType::Struct(Fields::from(vec![Field::new(
+            "type_url",
+            DataType::Utf8,
+            true,
+        )])),
+        // Extra child.
+        DataType::Struct(Fields::from(vec![
+            Field::new("type_url", DataType::Utf8, true),
+            Field::new("value", DataType::Binary, true),
+            Field::new("extra", DataType::Int32, true),
+        ])),
+        // Wrong child type.
+        DataType::Struct(Fields::from(vec![
+            Field::new("type_url", DataType::Utf8, true),
+            Field::new("value", DataType::Utf8, true),
+        ])),
+    ];
+
+    for shape in wrong_shapes {
+        let arrow_schema = Schema::new(vec![Field::new("raw", shape.clone(), true)]);
+        let err = infer_mapping(&arrow_schema, &msg, &InferOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, MappingError::AnyRawShapeMismatch { .. }),
+            "shape {shape} should be rejected, got {err:?}",
+        );
+        // The error should point the user at any_pack.
+        assert!(err.to_string().contains("any_pack"));
+    }
 }

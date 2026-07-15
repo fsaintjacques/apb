@@ -31,4 +31,5 @@ message Envelope {
   google.protobuf.Any payload = 3 [(apb.apb).any_pack = "fixtures.OrderPlaced"];
   google.protobuf.Any context = 4 [(apb.apb).any_pack = "fixtures.RequestContext"];
   google.protobuf.Any raw = 5;
+  repeated google.protobuf.Any events = 6 [(apb.apb).any_pack = "fixtures.OrderPlaced"];
 }

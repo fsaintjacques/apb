@@ -64,6 +64,15 @@ pub enum FieldShape {
     },
     /// Nested message. Contains the sub-mapping.
     Message(Box<FieldMapping>),
+    /// `google.protobuf.Any` field packed from a typed struct column.
+    /// The struct is serialized as the payload message and wrapped in an
+    /// Any with the precomputed type_url.
+    AnyPacked {
+        /// Derived type_url, e.g. `type.googleapis.com/my.pkg.Foo`.
+        type_url: String,
+        /// Mapping of the struct's children onto the payload message.
+        inner: Box<FieldMapping>,
+    },
 }
 
 /// A proto oneof group mapped from an Arrow StructArray.
@@ -156,4 +165,18 @@ pub enum MappingError {
 
     #[error("duplicate proto binding: proto field '{proto_field}' bound to multiple arrow fields")]
     DuplicateProtoBinding { proto_field: String },
+
+    #[error("google.protobuf.Any field '{proto_field}': any_pack target '{target}' not found in descriptor pool (ensure the payload proto is compiled into the descriptor set)")]
+    AnyPackTargetNotFound { proto_field: String, target: String },
+
+    #[error(
+        "field '{proto_field}' has any_pack = '{target}' but is not a google.protobuf.Any field"
+    )]
+    AnyPackOnNonAnyField { proto_field: String, target: String },
+
+    #[error("google.protobuf.Any field '{proto_field}' without any_pack requires Arrow Struct<type_url: Utf8, value: Binary>, got {actual} (declare (apb).any_pack to pack a typed struct instead)")]
+    AnyRawShapeMismatch { proto_field: String, actual: String },
+
+    #[error("invalid any_url_prefix '{prefix}': must be non-empty")]
+    InvalidAnyUrlPrefix { prefix: String },
 }

@@ -164,6 +164,7 @@ fn validate_strict_unmapped_proto() {
         coerce_all: false,
         allow_unmapped_proto: false,
         allow_unmapped_arrow: true,
+        ..InferOptions::default()
     };
 
     let report = validate(&arrow_schema, &msg, &options);
@@ -189,6 +190,7 @@ fn validate_strict_unmapped_arrow() {
         coerce_all: false,
         allow_unmapped_proto: true,
         allow_unmapped_arrow: false,
+        ..InferOptions::default()
     };
 
     let report = validate(&arrow_schema, &msg, &options);

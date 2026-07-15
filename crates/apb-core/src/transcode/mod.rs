@@ -17,8 +17,9 @@ use arrow_buffer::{Buffer, OffsetBuffer};
 
 use crate::mapping::FieldMapping;
 use plan::{
-    EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder, FieldEncoderKind, MapEncoder,
-    MessageEncoder, OneofEncoder, OneofVariantEncoder, RepeatedEncoder,
+    AnyPackedEncoder, EncoderEntry, EncodingPlan, EnumLookupEncoder, FieldEncoder,
+    FieldEncoderKind, MapEncoder, MessageEncoder, OneofEncoder, OneofVariantEncoder,
+    RepeatedEncoder,
 };
 
 /// Error during transcoding.
@@ -187,6 +188,10 @@ fn encode_field(
             buf.extend_from_slice(&encoder.tag);
             encode_nested_message_body(buf, row, array, msg_enc)?;
         }
+        FieldEncoderKind::AnyPacked(any_enc) => {
+            buf.extend_from_slice(&encoder.tag);
+            encode_any_packed_body(buf, row, array, any_enc)?;
+        }
         FieldEncoderKind::Repeated(rep_enc) => {
             encode_repeated(buf, row, array, rep_enc, &encoder.proto_name)?;
         }
@@ -277,6 +282,33 @@ fn encode_nested_message_body(
     Ok(())
 }
 
+/// Encode a packed google.protobuf.Any body as a length-delimited value
+/// (no outer tag). The struct's children are serialized as the payload
+/// message into the Any's `value` field, preceded by the constant type_url.
+///
+/// Caller is responsible for writing the field tag before calling this.
+fn encode_any_packed_body(
+    buf: &mut Vec<u8>,
+    row: usize,
+    array: &dyn Array,
+    any_enc: &AnyPackedEncoder,
+) -> Result<(), TranscodeError> {
+    let struct_array = array
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("packed Any column should be StructArray");
+
+    let any_pos = wire::begin_length_delimited(buf);
+    buf.extend_from_slice(&any_enc.type_url_field);
+    buf.extend_from_slice(&any_enc.value_tag);
+    let value_pos = wire::begin_length_delimited(buf);
+    encode_message_fields(buf, row, struct_array.columns(), &any_enc.payload_plan)?;
+    wire::finish_length_delimited(buf, value_pos);
+    wire::finish_length_delimited(buf, any_pos);
+
+    Ok(())
+}
+
 /// Encode a repeated field (ListArray → repeated proto field).
 fn encode_repeated(
     buf: &mut Vec<u8>,
@@ -339,6 +371,10 @@ fn encode_repeated(
                 FieldEncoderKind::Message(msg_enc) => {
                     buf.extend_from_slice(&rep_enc.element_tag);
                     encode_nested_message_body(buf, i, values, msg_enc)?;
+                }
+                FieldEncoderKind::AnyPacked(any_enc) => {
+                    buf.extend_from_slice(&rep_enc.element_tag);
+                    encode_any_packed_body(buf, i, values, any_enc)?;
                 }
                 _ => {
                     return Err(TranscodeError::FieldError {
@@ -411,6 +447,9 @@ fn encode_map(
                 }
                 FieldEncoderKind::Message(msg_enc) => {
                     encode_nested_message_body(buf, i, values.as_ref(), msg_enc)?;
+                }
+                FieldEncoderKind::AnyPacked(any_enc) => {
+                    encode_any_packed_body(buf, i, values.as_ref(), any_enc)?;
                 }
                 _ => {
                     return Err(TranscodeError::FieldError {
@@ -496,6 +535,9 @@ fn encode_oneof(
         }
         FieldEncoderKind::Message(msg_enc) => {
             encode_nested_message_body(buf, row, child.as_ref(), msg_enc)?;
+        }
+        FieldEncoderKind::AnyPacked(any_enc) => {
+            encode_any_packed_body(buf, row, child.as_ref(), any_enc)?;
         }
         _ => {
             return Err(TranscodeError::FieldError {

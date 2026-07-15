@@ -66,6 +66,7 @@ mod tests {
 
     const SCALARS_BIN: &[u8] = include_bytes!("../../fixtures/scalars.bin");
     const NESTED_BIN: &[u8] = include_bytes!("../../fixtures/nested.bin");
+    const ANY_BIN: &[u8] = include_bytes!("../../fixtures/any.bin");
 
     #[test]
     fn reject_garbage_bytes() {
@@ -201,6 +202,39 @@ mod tests {
         let field = opts.get_field_by_name("any_pack").unwrap();
         assert_eq!(field.number(), 3);
         assert!(matches!(field.kind(), Kind::String));
+    }
+
+    /// The any.proto fixture parses and its any_pack annotations resolve
+    /// through the extension (plan 07).
+    #[test]
+    fn any_fixture_annotations_resolve() {
+        let schema = ProtoSchema::from_bytes(ANY_BIN).unwrap();
+        let msg = schema.message("fixtures.Envelope").unwrap();
+
+        let ext = schema.pool().get_extension_by_name("apb.apb").unwrap();
+
+        let payload = msg.get_field_by_name("payload").unwrap();
+        assert!(matches!(payload.kind(), Kind::Message(desc)
+            if desc.full_name() == "google.protobuf.Any"));
+        let opts = payload.options();
+        let apb_value = opts.get_extension(&ext);
+        let apb_msg = match apb_value.as_ref() {
+            prost_reflect::Value::Message(m) => m.clone(),
+            other => panic!("expected message extension value, got {other:?}"),
+        };
+        let any_pack = apb_msg.get_field_by_name("any_pack").unwrap();
+        assert_eq!(
+            any_pack.as_ref(),
+            &prost_reflect::Value::String("fixtures.OrderPlaced".to_string()),
+        );
+
+        // Payload messages resolve in the same pool.
+        assert!(schema.message("fixtures.OrderPlaced").is_ok());
+        assert!(schema.message("fixtures.RequestContext").is_ok());
+
+        // The raw field carries no annotation.
+        let raw = msg.get_field_by_name("raw").unwrap();
+        assert!(!raw.options().has_extension(&ext));
     }
 
     /// Descriptors that import well-known types (e.g. google.protobuf.Timestamp)

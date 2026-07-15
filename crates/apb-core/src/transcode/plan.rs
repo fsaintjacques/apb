@@ -57,6 +57,9 @@ pub enum FieldEncoderKind {
     EnumLookup(EnumLookupEncoder),
     /// Nested message — sub-plan for the struct's children.
     Message(MessageEncoder),
+    /// Packed google.protobuf.Any — payload sub-plan wrapped with a
+    /// precomputed type_url.
+    AnyPacked(AnyPackedEncoder),
     /// Repeated field (list).
     Repeated(RepeatedEncoder),
     /// Map field.
@@ -76,6 +79,18 @@ pub struct EnumLookupEncoder {
 /// Encodes a StructArray as a nested proto message.
 pub struct MessageEncoder {
     pub sub_plan: EncodingPlan,
+}
+
+/// Encodes a StructArray as a google.protobuf.Any wrapping the payload
+/// message: `Any { type_url (field 1), value (field 2) }`. The type_url is
+/// constant per binding and pre-encoded as complete sub-field bytes.
+pub struct AnyPackedEncoder {
+    /// Pre-encoded type_url sub-field: tag (0x0a) + length + url bytes.
+    pub type_url_field: Vec<u8>,
+    /// Pre-encoded tag for value (field 2, length-delimited): 0x12.
+    pub value_tag: Vec<u8>,
+    /// Sub-plan encoding the struct's children as the payload message.
+    pub payload_plan: EncodingPlan,
 }
 
 /// Encodes a ListArray as a proto repeated field.
@@ -220,11 +235,21 @@ fn build_encoder_kind(
             let tag = wire::encode_tag(proto_number, wire::WIRE_LENGTH_DELIMITED);
             Ok((FieldEncoderKind::Message(MessageEncoder { sub_plan }), tag))
         }
-        // Packed Any encoder lands with the encoding stage of plan 07.
-        FieldShape::AnyPacked { .. } => Err(PlanError::NoEncoder {
-            arrow_type: format!("{arrow_type}"),
-            proto_type: "google.protobuf.Any (packed)".to_string(),
-        }),
+        FieldShape::AnyPacked { type_url, inner } => {
+            let payload_plan = EncodingPlan::from_mapping(inner)?;
+            let mut type_url_field = wire::encode_tag(1, wire::WIRE_LENGTH_DELIMITED);
+            wire::encode_length_delimited(type_url.as_bytes(), &mut type_url_field);
+            let value_tag = wire::encode_tag(2, wire::WIRE_LENGTH_DELIMITED);
+            let tag = wire::encode_tag(proto_number, wire::WIRE_LENGTH_DELIMITED);
+            Ok((
+                FieldEncoderKind::AnyPacked(AnyPackedEncoder {
+                    type_url_field,
+                    value_tag,
+                    payload_plan,
+                }),
+                tag,
+            ))
+        }
         FieldShape::Repeated {
             element_type_check,
             element_shape,

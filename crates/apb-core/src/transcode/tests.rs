@@ -1661,3 +1661,334 @@ fn roundtrip_duration_nanosecond() {
         141_592_653
     );
 }
+
+// ==================== google.protobuf.Any ====================
+
+const ANY_BIN: &[u8] = include_bytes!("../../fixtures/any.bin");
+
+fn any_schema() -> ProtoSchema {
+    ProtoSchema::from_bytes(ANY_BIN).unwrap()
+}
+
+fn order_placed_fields() -> Fields {
+    Fields::from(vec![
+        Field::new("order_id", DataType::Utf8, true),
+        Field::new("amount_cents", DataType::Int64, true),
+    ])
+}
+
+fn order_placed_struct(
+    order_ids: Vec<Option<&str>>,
+    amounts: Vec<Option<i64>>,
+    validity: Option<Vec<bool>>,
+) -> StructArray {
+    let order_id: ArrayRef = Arc::new(StringArray::from(order_ids));
+    let amount: ArrayRef = Arc::new(Int64Array::from(amounts));
+    let nulls = validity.map(arrow_buffer::NullBuffer::from);
+    StructArray::new(order_placed_fields(), vec![order_id, amount], nulls)
+}
+
+/// Extract (type_url, value) from an Any field of a decoded message.
+fn get_any(msg: &DynamicMessage, field: &str) -> (String, Vec<u8>) {
+    let v = msg.get_field_by_name(field).unwrap();
+    let m = match v.as_ref() {
+        prost_reflect::Value::Message(m) => m.clone(),
+        other => panic!("expected message for '{field}', got {other:?}"),
+    };
+    let url = match m.get_field_by_name("type_url").unwrap().as_ref() {
+        prost_reflect::Value::String(s) => s.clone(),
+        other => panic!("expected string type_url, got {other:?}"),
+    };
+    let value = match m.get_field_by_name("value").unwrap().as_ref() {
+        prost_reflect::Value::Bytes(b) => b.to_vec(),
+        other => panic!("expected bytes value, got {other:?}"),
+    };
+    (url, value)
+}
+
+#[test]
+fn any_packed_round_trip() {
+    let schema = any_schema();
+    let arrow_schema = Schema::new(vec![
+        Field::new("event_id", DataType::Utf8, false),
+        Field::new("payload", DataType::Struct(order_placed_fields()), true),
+    ]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    let payload = order_placed_struct(vec![Some("ord-1")], vec![Some(1299)], None);
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema),
+        vec![
+            Arc::new(StringArray::from(vec!["evt-1"])),
+            Arc::new(payload),
+        ],
+    )
+    .unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+
+    let (url, value) = get_any(&msg, "payload");
+    assert_eq!(url, "type.googleapis.com/fixtures.OrderPlaced");
+
+    let inner = decode_message(&value, &schema, "fixtures.OrderPlaced");
+    assert_eq!(
+        inner.get_field_by_name("order_id").unwrap().as_ref(),
+        &prost_reflect::Value::String("ord-1".to_string()),
+    );
+    assert_eq!(
+        inner.get_field_by_name("amount_cents").unwrap().as_ref(),
+        &prost_reflect::Value::I64(1299),
+    );
+}
+
+#[test]
+fn any_packed_two_fields_with_wkt_payload() {
+    let schema = any_schema();
+
+    let origin_fields = Fields::from(vec![
+        Field::new("service", DataType::Utf8, true),
+        Field::new("region", DataType::Int32, true),
+    ]);
+    let context_fields = Fields::from(vec![
+        Field::new(
+            "received_at",
+            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            true,
+        ),
+        Field::new("trace_id", DataType::Utf8, true),
+        Field::new("origin", DataType::Struct(origin_fields.clone()), true),
+    ]);
+    let arrow_schema = Schema::new(vec![
+        Field::new("payload", DataType::Struct(order_placed_fields()), true),
+        Field::new("context", DataType::Struct(context_fields.clone()), true),
+    ]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    let origin = StructArray::new(
+        origin_fields,
+        vec![
+            Arc::new(StringArray::from(vec!["checkout"])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![7])),
+        ],
+        None,
+    );
+    let context = StructArray::new(
+        context_fields,
+        vec![
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                1_720_000_000_123_456i64,
+            ])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["trace-42"])),
+            Arc::new(origin),
+        ],
+        None,
+    );
+    let payload = order_placed_struct(vec![Some("ord-2")], vec![Some(50)], None);
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema),
+        vec![Arc::new(payload), Arc::new(context)],
+    )
+    .unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+
+    let (payload_url, _) = get_any(&msg, "payload");
+    assert_eq!(payload_url, "type.googleapis.com/fixtures.OrderPlaced");
+
+    let (context_url, context_value) = get_any(&msg, "context");
+    assert_eq!(context_url, "type.googleapis.com/fixtures.RequestContext");
+
+    let ctx = decode_message(&context_value, &schema, "fixtures.RequestContext");
+    assert_eq!(
+        ctx.get_field_by_name("trace_id").unwrap().as_ref(),
+        &prost_reflect::Value::String("trace-42".to_string()),
+    );
+    // received_at: 1_720_000_000_123_456 us → 1_720_000_000 s + 123_456_000 ns
+    let received = match ctx.get_field_by_name("received_at").unwrap().as_ref() {
+        prost_reflect::Value::Message(m) => m.clone(),
+        other => panic!("expected Timestamp message, got {other:?}"),
+    };
+    assert_eq!(
+        received.get_field_by_name("seconds").unwrap().as_ref(),
+        &prost_reflect::Value::I64(1_720_000_000),
+    );
+    assert_eq!(
+        received.get_field_by_name("nanos").unwrap().as_ref(),
+        &prost_reflect::Value::I32(123_456_000),
+    );
+    let origin = match ctx.get_field_by_name("origin").unwrap().as_ref() {
+        prost_reflect::Value::Message(m) => m.clone(),
+        other => panic!("expected Origin message, got {other:?}"),
+    };
+    assert_eq!(
+        origin.get_field_by_name("service").unwrap().as_ref(),
+        &prost_reflect::Value::String("checkout".to_string()),
+    );
+}
+
+#[test]
+fn any_packed_null_struct_omitted() {
+    let schema = any_schema();
+    let arrow_schema = Schema::new(vec![Field::new(
+        "payload",
+        DataType::Struct(order_placed_fields()),
+        true,
+    )]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    let payload = order_placed_struct(vec![None], vec![None], Some(vec![false]));
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(payload)]).unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    assert!(out.value(0).is_empty());
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+    assert!(!msg.has_field_by_name("payload"));
+}
+
+#[test]
+fn any_packed_all_null_children_typed_empty() {
+    let schema = any_schema();
+    let arrow_schema = Schema::new(vec![Field::new(
+        "payload",
+        DataType::Struct(order_placed_fields()),
+        true,
+    )]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    // Struct row is valid but every child is null → empty, typed payload.
+    let payload = order_placed_struct(vec![None], vec![None], None);
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(payload)]).unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+    assert!(msg.has_field_by_name("payload"));
+    let (url, value) = get_any(&msg, "payload");
+    assert_eq!(url, "type.googleapis.com/fixtures.OrderPlaced");
+    assert!(value.is_empty());
+}
+
+#[test]
+fn any_packed_long_payload_length_backpatch() {
+    let schema = any_schema();
+    let arrow_schema = Schema::new(vec![Field::new(
+        "payload",
+        DataType::Struct(order_placed_fields()),
+        true,
+    )]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    // > 128 bytes forces the multi-byte varint shift in both nested lengths.
+    let long_id = "x".repeat(300);
+    let payload = order_placed_struct(vec![Some(&long_id)], vec![Some(1)], None);
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(payload)]).unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+    let (_, value) = get_any(&msg, "payload");
+    let inner = decode_message(&value, &schema, "fixtures.OrderPlaced");
+    assert_eq!(
+        inner.get_field_by_name("order_id").unwrap().as_ref(),
+        &prost_reflect::Value::String(long_id),
+    );
+}
+
+#[test]
+fn any_raw_passthrough_round_trip() {
+    use prost::Message as _;
+
+    let schema = any_schema();
+
+    // Pre-serialize an OrderPlaced payload, as a raw-mode user would.
+    let order_desc = schema.message("fixtures.OrderPlaced").unwrap();
+    let mut order = DynamicMessage::new(order_desc.clone());
+    order
+        .try_set_field_by_name(
+            "order_id",
+            prost_reflect::Value::String("ord-raw".to_string()),
+        )
+        .unwrap();
+    let inner_bytes = order.encode_to_vec();
+
+    let raw_fields = Fields::from(vec![
+        Field::new("type_url", DataType::Utf8, true),
+        Field::new("value", DataType::Binary, true),
+    ]);
+    let arrow_schema = Schema::new(vec![Field::new(
+        "raw",
+        DataType::Struct(raw_fields.clone()),
+        true,
+    )]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    let raw = StructArray::new(
+        raw_fields,
+        vec![
+            Arc::new(StringArray::from(vec![
+                "type.googleapis.com/fixtures.OrderPlaced",
+            ])) as ArrayRef,
+            Arc::new(BinaryArray::from(vec![&inner_bytes[..]])),
+        ],
+        None,
+    );
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(raw)]).unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+    let (url, value) = get_any(&msg, "raw");
+    assert_eq!(url, "type.googleapis.com/fixtures.OrderPlaced");
+    assert_eq!(value, inner_bytes);
+}
+
+#[test]
+fn any_packed_repeated() {
+    let schema = any_schema();
+    let item_field = Arc::new(Field::new(
+        "item",
+        DataType::Struct(order_placed_fields()),
+        true,
+    ));
+    let arrow_schema = Schema::new(vec![Field::new(
+        "events",
+        DataType::List(item_field.clone()),
+        true,
+    )]);
+    let transcoder = build_transcoder(&arrow_schema, &schema, "fixtures.Envelope");
+
+    let values = order_placed_struct(vec![Some("a"), Some("b")], vec![Some(1), Some(2)], None);
+    let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2].into());
+    let events = ListArray::new(item_field, offsets, Arc::new(values), None);
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![Arc::new(events)]).unwrap();
+
+    let out = transcoder.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(out.value(0), &schema, "fixtures.Envelope");
+
+    let events_value = msg.get_field_by_name("events").unwrap();
+    let list = match events_value.as_ref() {
+        prost_reflect::Value::List(items) => items.clone(),
+        other => panic!("expected list, got {other:?}"),
+    };
+    assert_eq!(list.len(), 2);
+    for (i, (item, expected_id)) in list.iter().zip(["a", "b"]).enumerate() {
+        let any = match item {
+            prost_reflect::Value::Message(m) => m.clone(),
+            other => panic!("expected Any message, got {other:?}"),
+        };
+        let url = match any.get_field_by_name("type_url").unwrap().as_ref() {
+            prost_reflect::Value::String(s) => s.clone(),
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert_eq!(url, "type.googleapis.com/fixtures.OrderPlaced");
+        let value = match any.get_field_by_name("value").unwrap().as_ref() {
+            prost_reflect::Value::Bytes(b) => b.to_vec(),
+            other => panic!("expected bytes, got {other:?}"),
+        };
+        let inner = decode_message(&value, &schema, "fixtures.OrderPlaced");
+        assert_eq!(
+            inner.get_field_by_name("order_id").unwrap().as_ref(),
+            &prost_reflect::Value::String(expected_id.to_string()),
+            "element {i}",
+        );
+    }
+}

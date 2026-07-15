@@ -54,6 +54,16 @@ enum Command {
         /// Output format: human or json.
         #[arg(long, default_value = "human")]
         format: String,
+
+        /// Pack a google.protobuf.Any field from a typed struct column:
+        /// FIELD=MESSAGE (fully qualified). Repeatable. Overrides
+        /// (apb).any_pack annotations.
+        #[arg(long = "any-pack", value_name = "FIELD=MESSAGE", value_parser = parse_any_pack)]
+        any_pack: Vec<(String, String)>,
+
+        /// type_url prefix for packed Any fields.
+        #[arg(long, default_value = "type.googleapis.com", value_parser = parse_any_url_prefix)]
+        any_url_prefix: String,
     },
 
     /// Generate a proto descriptor from an Arrow schema.
@@ -112,7 +122,38 @@ enum Command {
         /// Behavior for unknown enum string values: error, default, skip.
         #[arg(long, value_enum, default_value = "error")]
         unknown_enum: CliUnknownEnum,
+
+        /// Pack a google.protobuf.Any field from a typed struct column:
+        /// FIELD=MESSAGE (fully qualified). Repeatable. Overrides
+        /// (apb).any_pack annotations.
+        #[arg(long = "any-pack", value_name = "FIELD=MESSAGE", value_parser = parse_any_pack)]
+        any_pack: Vec<(String, String)>,
+
+        /// type_url prefix for packed Any fields.
+        #[arg(long, default_value = "type.googleapis.com", value_parser = parse_any_url_prefix)]
+        any_url_prefix: String,
     },
+}
+
+/// Parse a FIELD=MESSAGE pair for --any-pack.
+fn parse_any_pack(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((field, target)) if !field.is_empty() && !target.is_empty() => {
+            Ok((field.to_string(), target.to_string()))
+        }
+        _ => Err(format!(
+            "expected FIELD=MESSAGE (e.g. my.pkg.Event.payload=my.pkg.Foo), got '{s}'"
+        )),
+    }
+}
+
+/// Normalize --any-url-prefix: trim trailing slashes, reject empty.
+fn parse_any_url_prefix(s: &str) -> Result<String, String> {
+    let trimmed = s.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err("prefix must be non-empty".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 /// CLI wrapper for UnknownEnumBehavior (with clap derive).
@@ -162,7 +203,18 @@ fn main() {
             ipc,
             strict,
             format,
-        } => run_validate(descriptor, message, query, ipc, strict, format),
+            any_pack,
+            any_url_prefix,
+        } => run_validate(
+            descriptor,
+            message,
+            query,
+            ipc,
+            strict,
+            format,
+            any_pack,
+            any_url_prefix,
+        ),
         Command::Generate {
             query,
             ipc,
@@ -179,6 +231,8 @@ fn main() {
             out,
             coerce,
             unknown_enum,
+            any_pack,
+            any_url_prefix,
         } => run_transcode(
             descriptor,
             message,
@@ -188,6 +242,8 @@ fn main() {
             out,
             coerce,
             unknown_enum.into(),
+            any_pack,
+            any_url_prefix,
         ),
     };
 
@@ -260,6 +316,7 @@ fn run_generate(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_validate(
     descriptor: String,
     message: String,
@@ -267,6 +324,8 @@ fn run_validate(
     ipc: Option<String>,
     strict: bool,
     format: String,
+    any_pack: Vec<(String, String)>,
+    any_url_prefix: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
     let msg_desc = proto_schema.message(&message)?;
@@ -279,6 +338,8 @@ fn run_validate(
     let options = InferOptions {
         allow_unmapped_proto: !strict,
         allow_unmapped_arrow: !strict,
+        any_pack: any_pack.into_iter().collect(),
+        any_url_prefix,
         ..InferOptions::default()
     };
 
@@ -311,6 +372,8 @@ fn run_transcode(
     out: Option<String>,
     coerce: bool,
     unknown_enum: apb_core::transcode::UnknownEnumBehavior,
+    any_pack: Vec<(String, String)>,
+    any_url_prefix: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let proto_schema = load_schema(&descriptor)?;
     let msg_desc = proto_schema.message(&message)?;
@@ -322,6 +385,8 @@ fn run_transcode(
 
     let infer_opts = InferOptions {
         coerce_all: coerce,
+        any_pack: any_pack.into_iter().collect(),
+        any_url_prefix,
         ..InferOptions::default()
     };
     let mapping = infer_mapping(&input.schema, &msg_desc, &infer_opts)?;

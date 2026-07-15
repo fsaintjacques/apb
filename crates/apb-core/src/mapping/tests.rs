@@ -852,8 +852,10 @@ fn infer_any_url_prefix_normalization() {
     let arrow_schema = Schema::new(vec![Field::new("payload", order_placed_struct(), true)]);
 
     // Trailing slashes are trimmed.
-    let mut options = InferOptions::default();
-    options.any_url_prefix = "example.com/".to_string();
+    let options = InferOptions {
+        any_url_prefix: "example.com/".to_string(),
+        ..InferOptions::default()
+    };
     let mapping = infer_mapping(&arrow_schema, &msg, &options).unwrap();
     match &mapping.bindings[0].field_shape {
         FieldShape::AnyPacked { type_url, .. } => {
@@ -864,8 +866,10 @@ fn infer_any_url_prefix_normalization() {
 
     // Empty (or slash-only) prefix is rejected.
     for prefix in ["", "/"] {
-        let mut options = InferOptions::default();
-        options.any_url_prefix = prefix.to_string();
+        let options = InferOptions {
+            any_url_prefix: prefix.to_string(),
+            ..InferOptions::default()
+        };
         let err = infer_mapping(&arrow_schema, &msg, &options).unwrap_err();
         assert!(matches!(err, MappingError::InvalidAnyUrlPrefix { .. }));
     }

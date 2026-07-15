@@ -112,6 +112,8 @@ name = "apb-cli"
 version = "0.1.0"
 dependencies = [
  "apb-core",
+ "arrow-array",
+ "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "clap",

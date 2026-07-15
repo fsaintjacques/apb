@@ -274,3 +274,113 @@ fn validate_human_rendering_shows_errors() {
         "should show type error reason: {rendered}"
     );
 }
+
+// ==================== google.protobuf.Any ====================
+
+const ANY_BIN: &[u8] = include_bytes!("../../fixtures/any.bin");
+
+fn any_proto_schema() -> ProtoSchema {
+    ProtoSchema::from_bytes(ANY_BIN).unwrap()
+}
+
+fn order_placed_struct() -> DataType {
+    DataType::Struct(Fields::from(vec![
+        Field::new("order_id", DataType::Utf8, true),
+        Field::new("amount_cents", DataType::Int64, true),
+    ]))
+}
+
+#[test]
+fn validate_any_packed_report() {
+    let schema = any_proto_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new("payload", order_placed_struct(), true)]);
+    let report = validate(&arrow_schema, &msg, &InferOptions::default());
+
+    let payload = report
+        .mapped
+        .iter()
+        .find(|f| f.proto_name == "payload")
+        .unwrap();
+    assert_eq!(payload.field_shape, FieldShapeSummary::AnyPacked);
+    assert_eq!(
+        payload.proto_type,
+        "Any[type.googleapis.com/fixtures.OrderPlaced]"
+    );
+
+    // The payload's inner mapping is reported nested under the field name.
+    let nested = report
+        .nested
+        .iter()
+        .find(|n| n.proto_field == "payload")
+        .unwrap();
+    assert_eq!(nested.report.message_name, "fixtures.OrderPlaced");
+    assert_eq!(nested.report.mapped.len(), 2);
+
+    // Human rendering shows the packed target and the payload fields.
+    let human = report.render_human();
+    assert!(human.contains("Any[type.googleapis.com/fixtures.OrderPlaced]"));
+    assert!(human.contains("order_id"));
+}
+
+#[test]
+fn validate_any_raw_report() {
+    let schema = any_proto_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let raw_struct = DataType::Struct(Fields::from(vec![
+        Field::new("type_url", DataType::Utf8, true),
+        Field::new("value", DataType::Binary, true),
+    ]));
+    let arrow_schema = Schema::new(vec![Field::new("raw", raw_struct, true)]);
+    let report = validate(&arrow_schema, &msg, &InferOptions::default());
+
+    let raw = report
+        .mapped
+        .iter()
+        .find(|f| f.proto_name == "raw")
+        .unwrap();
+    assert_eq!(raw.field_shape, FieldShapeSummary::Message);
+    assert!(raw.proto_type.contains("raw passthrough"));
+    assert!(raw.proto_type.contains("unverified"));
+
+    let human = report.render_human();
+    assert!(human.contains("raw passthrough"));
+}
+
+#[test]
+fn validate_any_repeated_packed_report() {
+    let schema = any_proto_schema();
+    let msg = schema.message("fixtures.Envelope").unwrap();
+
+    let arrow_schema = Schema::new(vec![Field::new(
+        "events",
+        DataType::List(std::sync::Arc::new(Field::new(
+            "item",
+            order_placed_struct(),
+            true,
+        ))),
+        true,
+    )]);
+    let report = validate(&arrow_schema, &msg, &InferOptions::default());
+
+    let events = report
+        .mapped
+        .iter()
+        .find(|f| f.proto_name == "events")
+        .unwrap();
+    assert_eq!(events.field_shape, FieldShapeSummary::Repeated);
+    assert_eq!(
+        events.proto_type,
+        "repeated Any[type.googleapis.com/fixtures.OrderPlaced]"
+    );
+
+    // Element payload mapping is nested under the repeated convention.
+    let nested = report
+        .nested
+        .iter()
+        .find(|n| n.proto_field == "events[]")
+        .unwrap();
+    assert_eq!(nested.report.message_name, "fixtures.OrderPlaced");
+}

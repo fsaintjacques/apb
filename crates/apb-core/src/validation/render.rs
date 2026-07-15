@@ -212,8 +212,11 @@ fn collect_rows(rows: &mut Vec<Row>, report: &MappingReport, depth: usize) {
                     depth,
                 });
 
-                // Recurse into nested message.
-                if f.field_shape == FieldShapeSummary::Message {
+                // Recurse into nested message (or packed Any payload).
+                if matches!(
+                    f.field_shape,
+                    FieldShapeSummary::Message | FieldShapeSummary::AnyPacked
+                ) {
                     if let Some(nested) =
                         report.nested.iter().find(|n| n.proto_field == f.proto_name)
                     {

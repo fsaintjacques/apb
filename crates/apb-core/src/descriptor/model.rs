@@ -190,6 +190,19 @@ mod tests {
         assert!(schema.message("fixtures.Inner").is_ok());
     }
 
+    /// The embedded apb extension exposes the any_pack option (plan 07).
+    #[test]
+    fn apb_extension_has_any_pack() {
+        let schema = ProtoSchema::from_bytes(b"").unwrap();
+        let opts = schema
+            .pool()
+            .get_message_by_name("apb.ApbFieldOptions")
+            .unwrap();
+        let field = opts.get_field_by_name("any_pack").unwrap();
+        assert_eq!(field.number(), 3);
+        assert!(matches!(field.kind(), Kind::String));
+    }
+
     /// Descriptors that import well-known types (e.g. google.protobuf.Timestamp)
     /// without embedding them must still load successfully, since the pool is
     /// seeded with the global well-known type definitions.

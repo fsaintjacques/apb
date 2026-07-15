@@ -9,6 +9,11 @@ message ApbFieldOptions {
   optional string arrow_name = 1;
   // Allow type coercion for this field.
   optional bool coerce = 2;
+  // Fully-qualified payload message name for a google.protobuf.Any field.
+  // The message must be resolvable in the same descriptor pool. The bound
+  // Arrow Struct column is serialized as this message and wrapped in the
+  // Any with a derived type_url.
+  optional string any_pack = 3;
 }
 
 extend google.protobuf.FieldOptions {

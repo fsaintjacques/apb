@@ -61,6 +61,27 @@ pub enum ScalarKind {
     UInt64AsFixed32,
     UInt32AsUInt64Varint,
     UInt32AsFixed64,
+    // Signed ↔ unsigned crossover (two's-complement reinterpretation)
+    Int32AsUInt32Varint,
+    Int32AsUFixed32,
+    Int32AsUInt64Varint,
+    Int32AsUFixed64,
+    Int64AsUInt32Varint,
+    Int64AsUFixed32,
+    Int64AsUInt64Varint,
+    Int64AsUFixed64,
+    UInt32AsInt32Varint,
+    UInt32AsSint32,
+    UInt32AsSfixed32,
+    UInt32AsInt64Varint,
+    UInt32AsSint64,
+    UInt32AsSfixed64,
+    UInt64AsInt32Varint,
+    UInt64AsSint32,
+    UInt64AsSfixed32,
+    UInt64AsInt64Varint,
+    UInt64AsSint64,
+    UInt64AsSfixed64,
     Float64AsFloat32,
     Float32AsFloat64,
     Utf8AsBytes,
@@ -114,6 +135,26 @@ impl ScalarKind {
             Self::UInt64AsFixed32 => encode_uint64_as_fixed32(array, row, buf),
             Self::UInt32AsUInt64Varint => encode_uint32_as_uint64_varint(array, row, buf),
             Self::UInt32AsFixed64 => encode_uint32_as_fixed64(array, row, buf),
+            Self::Int32AsUInt32Varint => encode_int32_as_uint32_varint(array, row, buf),
+            Self::Int32AsUFixed32 => encode_int32_as_ufixed32(array, row, buf),
+            Self::Int32AsUInt64Varint => encode_int32_as_uint64_varint(array, row, buf),
+            Self::Int32AsUFixed64 => encode_int32_as_ufixed64(array, row, buf),
+            Self::Int64AsUInt32Varint => encode_int64_as_uint32_varint(array, row, buf),
+            Self::Int64AsUFixed32 => encode_int64_as_ufixed32(array, row, buf),
+            Self::Int64AsUInt64Varint => encode_int64_as_uint64_varint(array, row, buf),
+            Self::Int64AsUFixed64 => encode_int64_as_ufixed64(array, row, buf),
+            Self::UInt32AsInt32Varint => encode_uint32_as_int32_varint(array, row, buf),
+            Self::UInt32AsSint32 => encode_uint32_as_sint32(array, row, buf),
+            Self::UInt32AsSfixed32 => encode_uint32_as_sfixed32(array, row, buf),
+            Self::UInt32AsInt64Varint => encode_uint32_as_int64_varint(array, row, buf),
+            Self::UInt32AsSint64 => encode_uint32_as_sint64(array, row, buf),
+            Self::UInt32AsSfixed64 => encode_uint32_as_sfixed64(array, row, buf),
+            Self::UInt64AsInt32Varint => encode_uint64_as_int32_varint(array, row, buf),
+            Self::UInt64AsSint32 => encode_uint64_as_sint32(array, row, buf),
+            Self::UInt64AsSfixed32 => encode_uint64_as_sfixed32(array, row, buf),
+            Self::UInt64AsInt64Varint => encode_uint64_as_int64_varint(array, row, buf),
+            Self::UInt64AsSint64 => encode_uint64_as_sint64(array, row, buf),
+            Self::UInt64AsSfixed64 => encode_uint64_as_sfixed64(array, row, buf),
             Self::Float64AsFloat32 => encode_float64_as_float32(array, row, buf),
             Self::Float32AsFloat64 => encode_float32_as_float64(array, row, buf),
             Self::Utf8AsBytes => encode_utf8_as_bytes(array, row, buf),
@@ -446,6 +487,237 @@ pub fn encode_uint32_as_fixed64(
 ) -> Result<(), EncodeError> {
     let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
     wire::encode_fixed64(arr.value(row) as u64, buf);
+    Ok(())
+}
+
+// === Signed → unsigned crossover (two's-complement reinterpretation) ===
+//
+// No range checks: values are bit-cast like a C cast, matching what a
+// protobuf decoder does when a field changes between int and uint kinds.
+// Negatives become large unsigned values, widening sign-extends, narrowing
+// truncates.
+
+// Int32 → uint32 (varint, -1 → u32::MAX)
+pub fn encode_int32_as_uint32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
+    wire::encode_varint(arr.value(row) as u32 as u64, buf);
+    Ok(())
+}
+
+// Int32 → fixed32 (fixed 4 bytes, bit-identical)
+pub fn encode_int32_as_ufixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
+    wire::encode_fixed32(arr.value(row) as u32, buf);
+    Ok(())
+}
+
+// Int32 → uint64 (varint, sign-extends: -1 → u64::MAX)
+pub fn encode_int32_as_uint64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
+    wire::encode_varint(arr.value(row) as i64 as u64, buf);
+    Ok(())
+}
+
+// Int32 → fixed64 (fixed 8 bytes, sign-extends)
+pub fn encode_int32_as_ufixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
+    wire::encode_fixed64(arr.value(row) as i64 as u64, buf);
+    Ok(())
+}
+
+// Int64 → uint32 (varint, truncates to low 32 bits)
+pub fn encode_int64_as_uint32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
+    wire::encode_varint(arr.value(row) as u32 as u64, buf);
+    Ok(())
+}
+
+// Int64 → fixed32 (fixed 4 bytes, truncates to low 32 bits)
+pub fn encode_int64_as_ufixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
+    wire::encode_fixed32(arr.value(row) as u32, buf);
+    Ok(())
+}
+
+// Int64 → uint64 (varint, -1 → u64::MAX)
+pub fn encode_int64_as_uint64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
+    wire::encode_varint(arr.value(row) as u64, buf);
+    Ok(())
+}
+
+// Int64 → fixed64 (fixed 8 bytes, bit-identical)
+pub fn encode_int64_as_ufixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
+    wire::encode_fixed64(arr.value(row) as u64, buf);
+    Ok(())
+}
+
+// === Unsigned → signed crossover (two's-complement reinterpretation) ===
+
+// UInt32 → int32 (varint, u32::MAX → -1; negatives sign-extended to 64 bits
+// on the wire per proto spec)
+pub fn encode_uint32_as_int32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_varint(arr.value(row) as i32 as i64 as u64, buf);
+    Ok(())
+}
+
+// UInt32 → sint32 (zigzag, u32::MAX → -1)
+pub fn encode_uint32_as_sint32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_zigzag32(arr.value(row) as i32, buf);
+    Ok(())
+}
+
+// UInt32 → sfixed32 (fixed 4 bytes, bit-identical)
+pub fn encode_uint32_as_sfixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_fixed32(arr.value(row), buf);
+    Ok(())
+}
+
+// UInt32 → int64 (varint, lossless — every u32 fits in i64)
+pub fn encode_uint32_as_int64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_varint(arr.value(row) as u64, buf);
+    Ok(())
+}
+
+// UInt32 → sint64 (zigzag, lossless)
+pub fn encode_uint32_as_sint64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_zigzag64(arr.value(row) as i64, buf);
+    Ok(())
+}
+
+// UInt32 → sfixed64 (fixed 8 bytes, lossless)
+pub fn encode_uint32_as_sfixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+    wire::encode_fixed64(arr.value(row) as u64, buf);
+    Ok(())
+}
+
+// UInt64 → int32 (varint, truncates to low 32 bits; negatives sign-extended
+// to 64 bits on the wire per proto spec)
+pub fn encode_uint64_as_int32_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_varint(arr.value(row) as i32 as i64 as u64, buf);
+    Ok(())
+}
+
+// UInt64 → sint32 (zigzag, truncates to low 32 bits)
+pub fn encode_uint64_as_sint32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_zigzag32(arr.value(row) as i32, buf);
+    Ok(())
+}
+
+// UInt64 → sfixed32 (fixed 4 bytes, truncates to low 32 bits)
+pub fn encode_uint64_as_sfixed32(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_fixed32(arr.value(row) as u32, buf);
+    Ok(())
+}
+
+// UInt64 → int64 (varint, u64::MAX → -1; bit-identical on the wire)
+pub fn encode_uint64_as_int64_varint(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_varint(arr.value(row), buf);
+    Ok(())
+}
+
+// UInt64 → sint64 (zigzag, u64::MAX → -1)
+pub fn encode_uint64_as_sint64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_zigzag64(arr.value(row) as i64, buf);
+    Ok(())
+}
+
+// UInt64 → sfixed64 (fixed 8 bytes, bit-identical)
+pub fn encode_uint64_as_sfixed64(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+    wire::encode_fixed64(arr.value(row), buf);
     Ok(())
 }
 

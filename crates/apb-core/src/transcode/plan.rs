@@ -542,25 +542,25 @@ fn select_scalar_encoder(
             (ScalarKind::Int32AsUInt32Varint, wire::WIRE_VARINT)
         }
         (Int32, Kind::Fixed32, TypeCheckMode::Coerce { .. }) => {
-            (ScalarKind::Int32AsUFixed32, wire::WIRE_FIXED32)
+            (ScalarKind::Int32AsFixed32, wire::WIRE_FIXED32)
         }
         (Int32, Kind::Uint64, TypeCheckMode::Coerce { .. }) => {
             (ScalarKind::Int32AsUInt64Varint, wire::WIRE_VARINT)
         }
         (Int32, Kind::Fixed64, TypeCheckMode::Coerce { .. }) => {
-            (ScalarKind::Int32AsUFixed64, wire::WIRE_FIXED64)
+            (ScalarKind::Int32AsFixed64, wire::WIRE_FIXED64)
         }
         (Int64, Kind::Uint32, TypeCheckMode::Coerce { .. }) => {
             (ScalarKind::Int64AsUInt32Varint, wire::WIRE_VARINT)
         }
         (Int64, Kind::Fixed32, TypeCheckMode::Coerce { .. }) => {
-            (ScalarKind::Int64AsUFixed32, wire::WIRE_FIXED32)
+            (ScalarKind::Int64AsFixed32, wire::WIRE_FIXED32)
         }
         (Int64, Kind::Uint64, TypeCheckMode::Coerce { .. }) => {
             (ScalarKind::Int64AsUInt64Varint, wire::WIRE_VARINT)
         }
         (Int64, Kind::Fixed64, TypeCheckMode::Coerce { .. }) => {
-            (ScalarKind::Int64AsUFixed64, wire::WIRE_FIXED64)
+            (ScalarKind::Int64AsFixed64, wire::WIRE_FIXED64)
         }
         (UInt32, Kind::Int32, TypeCheckMode::Coerce { .. }) => {
             (ScalarKind::UInt32AsInt32Varint, wire::WIRE_VARINT)

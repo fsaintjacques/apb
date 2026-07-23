@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APB_PROTO_DIR="../../../proto/apb"
+APB_PROTO_DIR="../proto"
 
 # Regenerate the apb extension descriptor embedded by apb-core.
 protoc -I "$APB_PROTO_DIR" --descriptor_set_out="$APB_PROTO_DIR/apb.bin" \

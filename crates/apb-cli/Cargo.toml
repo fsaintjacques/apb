@@ -1,7 +1,10 @@
 [package]
 name = "apb-cli"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for transcoding Arrow data to Protobuf messages (apb)"
 
 [[bin]]
 name = "apb"
@@ -12,7 +15,7 @@ duckdb = ["dep:duckdb"]
 duckdb-bundled = ["duckdb", "dep:duckdb", "duckdb/bundled"]
 
 [dependencies]
-apb-core = { path = "../apb-core" }
+apb-core = { path = "../apb-core", version = "1.2.0" }
 arrow-ipc = "58"
 arrow-schema = "58"
 clap = { version = "4", features = ["derive"] }

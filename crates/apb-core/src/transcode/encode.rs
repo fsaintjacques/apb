@@ -63,13 +63,13 @@ pub enum ScalarKind {
     UInt32AsFixed64,
     // Signed ↔ unsigned crossover (two's-complement reinterpretation)
     Int32AsUInt32Varint,
-    Int32AsUFixed32,
+    Int32AsFixed32,
     Int32AsUInt64Varint,
-    Int32AsUFixed64,
+    Int32AsFixed64,
     Int64AsUInt32Varint,
-    Int64AsUFixed32,
+    Int64AsFixed32,
     Int64AsUInt64Varint,
-    Int64AsUFixed64,
+    Int64AsFixed64,
     UInt32AsInt32Varint,
     UInt32AsSint32,
     UInt32AsSfixed32,
@@ -136,13 +136,13 @@ impl ScalarKind {
             Self::UInt32AsUInt64Varint => encode_uint32_as_uint64_varint(array, row, buf),
             Self::UInt32AsFixed64 => encode_uint32_as_fixed64(array, row, buf),
             Self::Int32AsUInt32Varint => encode_int32_as_uint32_varint(array, row, buf),
-            Self::Int32AsUFixed32 => encode_int32_as_ufixed32(array, row, buf),
+            Self::Int32AsFixed32 => encode_int32_as_fixed32(array, row, buf),
             Self::Int32AsUInt64Varint => encode_int32_as_uint64_varint(array, row, buf),
-            Self::Int32AsUFixed64 => encode_int32_as_ufixed64(array, row, buf),
+            Self::Int32AsFixed64 => encode_int32_as_fixed64(array, row, buf),
             Self::Int64AsUInt32Varint => encode_int64_as_uint32_varint(array, row, buf),
-            Self::Int64AsUFixed32 => encode_int64_as_ufixed32(array, row, buf),
+            Self::Int64AsFixed32 => encode_int64_as_fixed32(array, row, buf),
             Self::Int64AsUInt64Varint => encode_int64_as_uint64_varint(array, row, buf),
-            Self::Int64AsUFixed64 => encode_int64_as_ufixed64(array, row, buf),
+            Self::Int64AsFixed64 => encode_int64_as_fixed64(array, row, buf),
             Self::UInt32AsInt32Varint => encode_uint32_as_int32_varint(array, row, buf),
             Self::UInt32AsSint32 => encode_uint32_as_sint32(array, row, buf),
             Self::UInt32AsSfixed32 => encode_uint32_as_sfixed32(array, row, buf),
@@ -509,7 +509,7 @@ pub fn encode_int32_as_uint32_varint(
 }
 
 // Int32 → fixed32 (fixed 4 bytes, bit-identical)
-pub fn encode_int32_as_ufixed32(
+pub fn encode_int32_as_fixed32(
     array: &dyn arrow_array::Array,
     row: usize,
     buf: &mut Vec<u8>,
@@ -531,7 +531,7 @@ pub fn encode_int32_as_uint64_varint(
 }
 
 // Int32 → fixed64 (fixed 8 bytes, sign-extends)
-pub fn encode_int32_as_ufixed64(
+pub fn encode_int32_as_fixed64(
     array: &dyn arrow_array::Array,
     row: usize,
     buf: &mut Vec<u8>,
@@ -553,7 +553,7 @@ pub fn encode_int64_as_uint32_varint(
 }
 
 // Int64 → fixed32 (fixed 4 bytes, truncates to low 32 bits)
-pub fn encode_int64_as_ufixed32(
+pub fn encode_int64_as_fixed32(
     array: &dyn arrow_array::Array,
     row: usize,
     buf: &mut Vec<u8>,
@@ -575,7 +575,7 @@ pub fn encode_int64_as_uint64_varint(
 }
 
 // Int64 → fixed64 (fixed 8 bytes, bit-identical)
-pub fn encode_int64_as_ufixed64(
+pub fn encode_int64_as_fixed64(
     array: &dyn arrow_array::Array,
     row: usize,
     buf: &mut Vec<u8>,

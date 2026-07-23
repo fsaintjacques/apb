@@ -20,7 +20,7 @@ pub struct ProtoSchema {
 
 /// Embedded apb.proto extension descriptor, so custom field options are
 /// resolvable when parsing user descriptors that don't include apb.proto.
-const APB_EXTENSION_BYTES: &[u8] = include_bytes!("../../../../proto/apb/apb.bin");
+const APB_EXTENSION_BYTES: &[u8] = include_bytes!("../../proto/apb.bin");
 
 impl ProtoSchema {
     /// Parse from serialized `FileDescriptorSet` bytes.

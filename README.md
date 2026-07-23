@@ -176,6 +176,9 @@ No inference is performed. Scalar fields only.
 Coercion is available per-field via annotation or globally via `--coerce`:
 
 - Integer narrowing/widening (Int64 → int32, truncation check)
+- Signed ↔ unsigned crossover (Int64 → uint64, UInt64 → int64, ...; values
+  reinterpret as two's complement like a C cast, no runtime check — BigQuery
+  only has signed INT64, so unsigned proto fields need this)
 - Float narrowing (Float64 → float, precision loss)
 - String/bytes crossover (Utf8 → bytes, Binary → string)
 - String → enum (runtime name lookup)

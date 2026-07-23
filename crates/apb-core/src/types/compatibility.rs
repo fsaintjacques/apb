@@ -148,6 +148,36 @@ fn check_resolved(arrow_type: &DataType, proto_kind: &Kind) -> TypeCompatibility
             risk: CoercionRisk::Lossless,
         },
 
+        // === Coercions: signed ↔ unsigned crossover ===
+        // Values are reinterpreted as two's complement (a C-style cast, and
+        // what a protobuf decoder does when a field changes between int and
+        // uint kinds): negatives become large unsigned values, widening
+        // sign-extends, narrowing truncates. No runtime checks. The main
+        // producer of these is BigQuery, whose only integer type surfaces as
+        // Arrow Int64 regardless of the proto's signedness.
+        (Int32, Kind::Uint32 | Kind::Fixed32 | Kind::Uint64 | Kind::Fixed64) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        (Int64, Kind::Uint64 | Kind::Fixed64) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        (Int64, Kind::Uint32 | Kind::Fixed32) => CoercionAvailable {
+            risk: CoercionRisk::Truncation,
+        },
+        (UInt32, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+        // Every u32 fits in i64: sign-class change only, no reinterpretation.
+        (UInt32, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => CoercionAvailable {
+            risk: CoercionRisk::Lossless,
+        },
+        (UInt64, Kind::Int32 | Kind::Sint32 | Kind::Sfixed32) => CoercionAvailable {
+            risk: CoercionRisk::Truncation,
+        },
+        (UInt64, Kind::Int64 | Kind::Sint64 | Kind::Sfixed64) => CoercionAvailable {
+            risk: CoercionRisk::Semantic,
+        },
+
         // === Coercions: float narrowing ===
         (Float64, Kind::Float) => CoercionAvailable {
             risk: CoercionRisk::PrecisionLoss,
@@ -446,6 +476,89 @@ mod tests {
                     risk: CoercionRisk::Lossless
                 },
                 "UInt32 → {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn coercion_int32_to_unsigned_semantic() {
+        for kind in [Kind::Uint32, Kind::Fixed32, Kind::Uint64, Kind::Fixed64] {
+            assert_eq!(
+                check_compatibility(&DataType::Int32, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Semantic
+                },
+                "Int32 → {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn coercion_int64_to_unsigned() {
+        for kind in [Kind::Uint64, Kind::Fixed64] {
+            assert_eq!(
+                check_compatibility(&DataType::Int64, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Semantic
+                },
+                "Int64 → {kind:?}",
+            );
+        }
+        for kind in [Kind::Uint32, Kind::Fixed32] {
+            assert_eq!(
+                check_compatibility(&DataType::Int64, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Truncation
+                },
+                "Int64 → {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn coercion_uint32_to_signed32_semantic() {
+        for kind in [Kind::Int32, Kind::Sint32, Kind::Sfixed32] {
+            assert_eq!(
+                check_compatibility(&DataType::UInt32, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Semantic
+                },
+                "UInt32 → {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn coercion_uint32_to_signed64_lossless() {
+        for kind in [Kind::Int64, Kind::Sint64, Kind::Sfixed64] {
+            assert_eq!(
+                check_compatibility(&DataType::UInt32, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Lossless
+                },
+                "UInt32 → {kind:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn coercion_uint64_to_signed() {
+        for kind in [Kind::Int64, Kind::Sint64, Kind::Sfixed64] {
+            assert_eq!(
+                check_compatibility(&DataType::UInt64, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Semantic
+                },
+                "UInt64 → {kind:?}",
+            );
+        }
+        for kind in [Kind::Int32, Kind::Sint32, Kind::Sfixed32] {
+            assert_eq!(
+                check_compatibility(&DataType::UInt64, &kind),
+                TypeCompatibility::CoercionAvailable {
+                    risk: CoercionRisk::Truncation
+                },
+                "UInt64 → {kind:?}",
             );
         }
     }

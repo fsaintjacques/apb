@@ -758,6 +758,152 @@ fn coercion_int64_to_int32_overflow() {
     );
 }
 
+// ==================== Signed ↔ unsigned coercions ====================
+
+/// Helper: transcode a single-column batch into `fixtures.Scalars` with an
+/// explicit coerce=true binding onto `proto_field`, returning the encoded
+/// messages.
+fn transcode_coerced(proto_field: &str, array: ArrayRef) -> Vec<Vec<u8>> {
+    use crate::mapping::{explicit_mapping, ArrowFieldRef, ExplicitBinding, ProtoFieldRef};
+
+    let schema = scalars_schema();
+    let msg = schema.message("fixtures.Scalars").unwrap();
+    let arrow_schema = Schema::new(vec![Field::new(
+        proto_field,
+        array.data_type().clone(),
+        false,
+    )]);
+    let mapping = explicit_mapping(
+        &arrow_schema,
+        &msg,
+        &[ExplicitBinding {
+            arrow_field: ArrowFieldRef::Index(0),
+            proto_field: ProtoFieldRef::Name(proto_field.to_string()),
+            coerce: true,
+        }],
+    )
+    .unwrap();
+    let transcoder = Transcoder::new(&mapping).unwrap();
+
+    let batch = RecordBatch::try_new(Arc::new(arrow_schema), vec![array]).unwrap();
+    let mut output = Vec::new();
+    transcoder.transcode_delimited(&batch, &mut output).unwrap();
+    split_delimited(&output)
+}
+
+/// Helper: decode row `i` of `msgs` and return the named field's value.
+fn coerced_field(msgs: &[Vec<u8>], i: usize, field: &str) -> prost_reflect::Value {
+    let schema = scalars_schema();
+    let m = decode_message(&msgs[i], &schema, "fixtures.Scalars");
+    m.get_field_by_name(field).unwrap().into_owned()
+}
+
+#[test]
+fn coercion_int64_to_uint64_reinterprets() {
+    let msgs = transcode_coerced(
+        "uint64_field",
+        Arc::new(Int64Array::from(vec![42i64, i64::MAX, -1])),
+    );
+    assert_eq!(coerced_field(&msgs, 0, "uint64_field").as_u64(), Some(42));
+    assert_eq!(
+        coerced_field(&msgs, 1, "uint64_field").as_u64(),
+        Some(i64::MAX as u64)
+    );
+    // -1 reinterprets as two's complement.
+    assert_eq!(
+        coerced_field(&msgs, 2, "uint64_field").as_u64(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn coercion_int64_to_uint32_truncates() {
+    let msgs = transcode_coerced(
+        "uint32_field",
+        Arc::new(Int64Array::from(vec![7i64, u32::MAX as i64 + 1, -1])),
+    );
+    assert_eq!(coerced_field(&msgs, 0, "uint32_field").as_u32(), Some(7));
+    // Values above u32::MAX keep only the low 32 bits.
+    assert_eq!(coerced_field(&msgs, 1, "uint32_field").as_u32(), Some(0));
+    assert_eq!(
+        coerced_field(&msgs, 2, "uint32_field").as_u32(),
+        Some(u32::MAX)
+    );
+}
+
+#[test]
+fn coercion_int64_to_fixed32_truncates() {
+    let msgs = transcode_coerced("fixed32_field", Arc::new(Int64Array::from(vec![9i64, -9])));
+    assert_eq!(coerced_field(&msgs, 0, "fixed32_field").as_u32(), Some(9));
+    assert_eq!(
+        coerced_field(&msgs, 1, "fixed32_field").as_u32(),
+        Some(-9i64 as u32)
+    );
+}
+
+#[test]
+fn coercion_int32_to_uint64_sign_extends() {
+    let msgs = transcode_coerced(
+        "uint64_field",
+        Arc::new(Int32Array::from(vec![i32::MAX, -1])),
+    );
+    assert_eq!(
+        coerced_field(&msgs, 0, "uint64_field").as_u64(),
+        Some(i32::MAX as u64)
+    );
+    // Widening from a signed source sign-extends before reinterpreting.
+    assert_eq!(
+        coerced_field(&msgs, 1, "uint64_field").as_u64(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn coercion_uint64_to_int64_reinterprets() {
+    let msgs = transcode_coerced(
+        "int64_field",
+        Arc::new(UInt64Array::from(vec![i64::MAX as u64, u64::MAX])),
+    );
+    assert_eq!(
+        coerced_field(&msgs, 0, "int64_field").as_i64(),
+        Some(i64::MAX)
+    );
+    assert_eq!(coerced_field(&msgs, 1, "int64_field").as_i64(), Some(-1));
+}
+
+#[test]
+fn coercion_uint64_to_sint32_truncates() {
+    let msgs = transcode_coerced(
+        "sint32_field",
+        Arc::new(UInt64Array::from(vec![5u64, i32::MAX as u64 + 1])),
+    );
+    assert_eq!(coerced_field(&msgs, 0, "sint32_field").as_i32(), Some(5));
+    // Low 32 bits reinterpreted as i32: i32::MAX + 1 wraps to i32::MIN.
+    assert_eq!(
+        coerced_field(&msgs, 1, "sint32_field").as_i32(),
+        Some(i32::MIN)
+    );
+}
+
+#[test]
+fn coercion_uint32_to_int64_lossless() {
+    let msgs = transcode_coerced("int64_field", Arc::new(UInt32Array::from(vec![u32::MAX])));
+    assert_eq!(
+        coerced_field(&msgs, 0, "int64_field").as_i64(),
+        Some(u32::MAX as i64)
+    );
+}
+
+#[test]
+fn coercion_uint32_to_int32_reinterprets() {
+    let msgs = transcode_coerced(
+        "int32_field",
+        Arc::new(UInt32Array::from(vec![7u32, u32::MAX])),
+    );
+    assert_eq!(coerced_field(&msgs, 0, "int32_field").as_i32(), Some(7));
+    assert_eq!(coerced_field(&msgs, 1, "int32_field").as_i32(), Some(-1));
+}
+
 // ==================== Nested message ====================
 
 #[test]

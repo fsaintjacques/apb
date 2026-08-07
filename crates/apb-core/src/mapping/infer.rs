@@ -540,27 +540,44 @@ fn resolve_map(
     coerce: bool,
     options: &InferOptions,
 ) -> Result<(TypeCheck, FieldShape), MappingError> {
+    // A proto map is wire-identical to `repeated MapEntry { key = 1; value = 2 }`,
+    // so both the Arrow Map type and a list of two-field entry structs are
+    // accepted. The latter is not a convenience: engines with no MAP type --
+    // BigQuery among them -- can only ever surface a map as
+    // `ARRAY<STRUCT<key, value>>`, which arrives as List<Struct<..>>. Rejecting
+    // it would make proto map fields unreachable from those sources entirely.
+    let entry_struct_fields = |fields: &Fields| -> Option<(DataType, DataType)> {
+        if fields.len() != 2 {
+            return None;
+        }
+        Some((
+            fields[0].data_type().clone(),
+            fields[1].data_type().clone(),
+        ))
+    };
+
+    let shape_err = |expected: &str| MappingError::TypeShapeMismatch {
+        field_name: proto_field.name().to_string(),
+        expected: expected.to_string(),
+        actual: format!("{arrow_type}"),
+    };
+
     let (key_type, value_type) = match arrow_type {
         DataType::Map(entry_field, _) => match entry_field.data_type() {
-            DataType::Struct(fields) if fields.len() == 2 => {
-                (fields[0].data_type(), fields[1].data_type())
-            }
-            _ => {
-                return Err(MappingError::TypeShapeMismatch {
-                    field_name: proto_field.name().to_string(),
-                    expected: "Map with Struct(key, value)".to_string(),
-                    actual: format!("{arrow_type}"),
-                });
-            }
+            DataType::Struct(fields) => entry_struct_fields(fields)
+                .ok_or_else(|| shape_err("Map with Struct(key, value)"))?,
+            _ => return Err(shape_err("Map with Struct(key, value)")),
         },
-        _ => {
-            return Err(MappingError::TypeShapeMismatch {
-                field_name: proto_field.name().to_string(),
-                expected: "Map".to_string(),
-                actual: format!("{arrow_type}"),
-            });
+        DataType::List(entry_field) | DataType::LargeList(entry_field) => {
+            match entry_field.data_type() {
+                DataType::Struct(fields) => entry_struct_fields(fields)
+                    .ok_or_else(|| shape_err("List of Struct(key, value)"))?,
+                _ => return Err(shape_err("Map, or List of Struct(key, value)")),
+            }
         }
+        _ => return Err(shape_err("Map, or List of Struct(key, value)")),
     };
+    let (key_type, value_type) = (&key_type, &value_type);
 
     // Proto map<K,V> — the map entry message has key (field 1) and value (field 2).
     let map_entry = match proto_field.kind() {

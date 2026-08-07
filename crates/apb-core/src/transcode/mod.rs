@@ -10,7 +10,7 @@ pub use enum_behavior::UnknownEnumBehavior;
 pub use plan::PlanError;
 
 use arrow_array::{
-    Array, BinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray, RecordBatch,
+    Array, ArrayRef, BinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray, RecordBatch,
     StringArray, StructArray,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
@@ -400,19 +400,64 @@ fn encode_map(
     map_enc: &MapEncoder,
     field_name: &str,
 ) -> Result<(), TranscodeError> {
-    let map_array = array
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .expect("map field should be MapArray");
+    // A proto map is wire-identical to `repeated MapEntry { key = 1; value = 2 }`,
+    // so the Arrow side may be either a MapArray or a list of two-field entry
+    // structs. The list form is what engines with no MAP type (BigQuery) produce
+    // for `ARRAY<STRUCT<key, value>>`; see resolve_map.
+    let shape_err = |reason: &str| TranscodeError::FieldError {
+        row,
+        arrow_field: field_name.to_string(),
+        proto_field: field_name.to_string(),
+        reason: reason.to_string(),
+    };
 
-    let offsets = map_array.offsets();
-    let start = offsets[row] as usize;
-    let end = offsets[row + 1] as usize;
+    fn list_entries(values: &ArrayRef) -> Option<&StructArray> {
+        values.as_any().downcast_ref::<StructArray>()
+    }
+    const LIST_ENTRY_ERR: &str = "map from a list requires Struct(key, value) entries";
 
-    let keys = map_array.keys();
-    let values = map_array.values();
+    let (start, end, keys, values, entries): (usize, usize, &dyn Array, &dyn Array, Option<&StructArray>) =
+        if let Some(m) = array.as_any().downcast_ref::<MapArray>() {
+            let o = m.offsets();
+            (
+                o[row] as usize,
+                o[row + 1] as usize,
+                m.keys().as_ref(),
+                m.values().as_ref(),
+                None,
+            )
+        } else if let Some(l) = array.as_any().downcast_ref::<ListArray>() {
+            let o = l.value_offsets();
+            let e = list_entries(l.values()).ok_or_else(|| shape_err(LIST_ENTRY_ERR))?;
+            (
+                o[row] as usize,
+                o[row + 1] as usize,
+                e.column(0).as_ref(),
+                e.column(1).as_ref(),
+                Some(e),
+            )
+        } else if let Some(l) = array.as_any().downcast_ref::<LargeListArray>() {
+            let o = l.value_offsets();
+            let e = list_entries(l.values()).ok_or_else(|| shape_err(LIST_ENTRY_ERR))?;
+            (
+                o[row] as usize,
+                o[row + 1] as usize,
+                e.column(0).as_ref(),
+                e.column(1).as_ref(),
+                Some(e),
+            )
+        } else {
+            return Err(shape_err(
+                "map field requires a MapArray or a List of Struct(key, value)",
+            ));
+        };
 
     for i in start..end {
+        // A null entry in the list form has no key, and proto map keys cannot be
+        // absent — skip rather than encode a default-keyed entry.
+        if entries.is_some_and(|e| e.is_null(i)) {
+            continue;
+        }
         buf.extend_from_slice(tag);
         let len_pos = wire::begin_length_delimited(buf);
 
@@ -420,7 +465,7 @@ fn encode_map(
         buf.extend_from_slice(&map_enc.key_tag);
         match &*map_enc.key_kind {
             FieldEncoderKind::Scalar(kind) => {
-                kind.encode(keys.as_ref(), i, buf)
+                kind.encode(keys, i, buf)
                     .map_err(|e| TranscodeError::FieldError {
                         row,
                         arrow_field: format!("{field_name}[{}].key", i - start),
@@ -436,7 +481,7 @@ fn encode_map(
             buf.extend_from_slice(&map_enc.value_tag);
             match &*map_enc.value_kind {
                 FieldEncoderKind::Scalar(kind) => {
-                    kind.encode(values.as_ref(), i, buf).map_err(|e| {
+                    kind.encode(values, i, buf).map_err(|e| {
                         TranscodeError::FieldError {
                             row,
                             arrow_field: format!("{field_name}[{}].value", i - start),
@@ -446,10 +491,10 @@ fn encode_map(
                     })?;
                 }
                 FieldEncoderKind::Message(msg_enc) => {
-                    encode_nested_message_body(buf, i, values.as_ref(), msg_enc)?;
+                    encode_nested_message_body(buf, i, values, msg_enc)?;
                 }
                 FieldEncoderKind::AnyPacked(any_enc) => {
-                    encode_any_packed_body(buf, i, values.as_ref(), any_enc)?;
+                    encode_any_packed_body(buf, i, values, any_enc)?;
                 }
                 _ => {
                     return Err(TranscodeError::FieldError {

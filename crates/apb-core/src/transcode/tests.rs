@@ -2138,3 +2138,401 @@ fn any_packed_repeated() {
         );
     }
 }
+
+// ============ String-encoded integers (Utf8 -> integer coercion) ============
+
+fn coerce_options() -> InferOptions {
+    InferOptions {
+        coerce_all: true,
+        ..InferOptions::default()
+    }
+}
+
+fn build_coercing_transcoder(arrow_schema: &Schema, proto: &ProtoSchema, msg: &str) -> Transcoder {
+    let desc = proto.message(msg).unwrap();
+    let mapping = infer_mapping(arrow_schema, &desc, &coerce_options()).unwrap();
+    Transcoder::new(&mapping).unwrap()
+}
+
+/// One-row batch with a single Utf8 column.
+fn str_batch(column: &str, value: Option<&str>) -> RecordBatch {
+    let schema = Schema::new(vec![Field::new(column, DataType::Utf8, true)]);
+    RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(StringArray::from(vec![value])) as ArrayRef],
+    )
+    .unwrap()
+}
+
+#[test]
+fn string_encoded_int64_requires_coercion() {
+    // Without coerce the binding must be rejected, not silently dropped —
+    // otherwise a schema drift from INT64 to STRING would quietly stop
+    // populating the field.
+    let proto = scalars_schema();
+    let desc = proto.message("fixtures.Scalars").unwrap();
+    let arrow_schema = Schema::new(vec![Field::new("int64_field", DataType::Utf8, true)]);
+
+    let err = infer_mapping(&arrow_schema, &desc, &InferOptions::default())
+        .expect_err("Utf8 -> int64 must not bind without coercion");
+    let msg = err.to_string();
+    assert!(msg.contains("coercion available"), "{msg}");
+    assert!(msg.contains("not enabled"), "{msg}");
+}
+
+#[test]
+fn string_encoded_integers_round_trip() {
+    let proto = scalars_schema();
+
+    // Each proto integer kind, exercising varint / zigzag / fixed paths.
+    for (column, input, expect) in [
+        ("int64_field", "9223372036854775807", i64::MAX),
+        ("int64_field", "-1", -1),
+        ("sint64_field", "-9007199254740993", -9007199254740993),
+        ("sfixed64_field", "-42", -42),
+        ("int32_field", "-2147483648", i32::MIN as i64),
+        ("sint32_field", "-7", -7),
+        ("sfixed32_field", "13", 13),
+    ] {
+        let batch = str_batch(column, Some(input));
+        let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+        let values = t.transcode_arrow(&batch).unwrap();
+        let msg = decode_message(values.value(0), &proto, "fixtures.Scalars");
+        // 32-bit proto fields decode to Value::I32, 64-bit to Value::I64.
+        let v = msg.get_field_by_name(column).unwrap();
+        let got = v.as_i64().or_else(|| v.as_i32().map(i64::from));
+        assert_eq!(got, Some(expect), "{column} = {input}");
+    }
+
+    for (column, input, expect) in [
+        ("uint64_field", "18446744073709551615", u64::MAX),
+        ("fixed64_field", "12345678901234567890", 12345678901234567890),
+        ("uint32_field", "4294967295", u32::MAX as u64),
+        ("fixed32_field", "0", 0),
+    ] {
+        let batch = str_batch(column, Some(input));
+        let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+        let values = t.transcode_arrow(&batch).unwrap();
+        let msg = decode_message(values.value(0), &proto, "fixtures.Scalars");
+        let got = msg
+            .get_field_by_name(column)
+            .unwrap()
+            .as_u64()
+            .or_else(|| msg.get_field_by_name(column).unwrap().as_u32().map(u64::from));
+        assert_eq!(got, Some(expect), "{column} = {input}");
+    }
+}
+
+#[test]
+fn negative_string_reinterprets_into_unsigned_field() {
+    // Mirrors the existing Int64 -> uint64 crossover coercion: producers whose
+    // only integer type is signed (BigQuery) must still be able to populate a
+    // uint64 proto field.
+    let proto = scalars_schema();
+    let batch = str_batch("uint64_field", Some("-1"));
+    let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+
+    let values = t.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(values.value(0), &proto, "fixtures.Scalars");
+    assert_eq!(
+        msg.get_field_by_name("uint64_field").unwrap().as_u64(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn unparseable_string_fails_the_batch() {
+    // Silent corruption is worse than a failed encode: a non-numeric string in
+    // an integer column must surface, not become zero.
+    let proto = scalars_schema();
+    for bad in ["", "12abc", "1.5", " 7", "0x10"] {
+        let batch = str_batch("int64_field", Some(bad));
+        let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+        let err = t
+            .transcode_arrow(&batch)
+            .expect_err(&format!("{bad:?} must fail"));
+        assert!(
+            err.to_string().contains("not a valid signed integer"),
+            "{bad:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn out_of_range_string_narrowing_fails() {
+    // 32-bit targets are range-checked, matching the Int64 -> int32 coercion
+    // rather than silently truncating.
+    let proto = scalars_schema();
+    let batch = str_batch("int32_field", Some("2147483648"));
+    let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+
+    let err = t.transcode_arrow(&batch).expect_err("must be out of range");
+    assert!(err.to_string().contains("out of range"), "{err}");
+}
+
+#[test]
+fn null_string_integer_stays_unset() {
+    let proto = scalars_schema();
+    let batch = str_batch("int64_field", None);
+    let t = build_coercing_transcoder(&batch.schema(), &proto, "fixtures.Scalars");
+
+    let values = t.transcode_arrow(&batch).unwrap();
+    assert!(values.value(0).is_empty(), "null must encode no field");
+}
+
+// ===== String-encoded integers through nested + repeated messages =====
+
+const NESTED_STRING_INTS_BIN: &[u8] = include_bytes!("../../fixtures/nested_string_ints.bin");
+
+/// One `items` element holding one related id and one detail with one marker,
+/// every 64-bit integer supplied as a string.
+fn nested_string_ints_batch() -> RecordBatch {
+    let marker_struct = StructArray::from(vec![
+        (
+            Arc::new(Field::new("marker_id", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("7")])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("marker_version", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("1500")])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("expires_at_millis", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef,
+        ),
+    ]);
+    let single = |values: ArrayRef| {
+        ListArray::new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            arrow_buffer::OffsetBuffer::new(vec![0, 1].into()),
+            values,
+            None,
+        )
+    };
+    let marker_list = single(Arc::new(marker_struct) as ArrayRef);
+
+    let detail_struct = StructArray::from(vec![
+        (
+            Arc::new(Field::new("markers", marker_list.data_type().clone(), true)),
+            Arc::new(marker_list) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("weight", DataType::Float64, true)),
+            Arc::new(Float64Array::from(vec![Some(0.75)])) as ArrayRef,
+        ),
+    ]);
+    let detail_list = single(Arc::new(detail_struct) as ArrayRef);
+
+    // `high` is NULL, exercising proto3 defaulting alongside the coercion.
+    let pair_id = |low: &str| {
+        StructArray::from(vec![
+            (
+                Arc::new(Field::new("low", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![Some(low)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("high", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef,
+            ),
+        ])
+    };
+    let related_list = single(Arc::new(pair_id("98765432109")) as ArrayRef);
+
+    let item_struct = StructArray::from(vec![
+        (
+            Arc::new(Field::new(
+                "item_id",
+                pair_id("12345678901").data_type().clone(),
+                true,
+            )),
+            Arc::new(pair_id("12345678901")) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("group_id", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("grp-0001")])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new(
+                "related_ids",
+                related_list.data_type().clone(),
+                true,
+            )),
+            Arc::new(related_list) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("details", detail_list.data_type().clone(), true)),
+            Arc::new(detail_list) as ArrayRef,
+        ),
+    ]);
+    let item_list = single(Arc::new(item_struct) as ArrayRef);
+
+    RecordBatch::try_from_iter(vec![("items", Arc::new(item_list) as ArrayRef)]).unwrap()
+}
+
+#[test]
+fn string_encoded_integers_round_trip_through_nesting() {
+    let proto = ProtoSchema::from_bytes(NESTED_STRING_INTS_BIN).unwrap();
+    let desc = proto.message("fixtures.ItemList").unwrap();
+    let batch = nested_string_ints_batch();
+
+    let mapping = infer_mapping(&batch.schema(), &desc, &coerce_options()).unwrap();
+    let values = Transcoder::new(&mapping)
+        .unwrap()
+        .transcode_arrow(&batch)
+        .unwrap();
+    let msg = decode_message(values.value(0), &proto, "fixtures.ItemList");
+
+    let items = msg.get_field_by_name("items").unwrap();
+    let item = &items.as_list().unwrap()[0];
+    let item = item.as_message().unwrap();
+
+    let item_id = item.get_field_by_name("item_id").unwrap();
+    let item_id = item_id.as_message().unwrap();
+    assert_eq!(
+        item_id.get_field_by_name("low").unwrap().as_u64(),
+        Some(12_345_678_901)
+    );
+    // NULL half stays at the proto3 default rather than failing the parse.
+    assert_eq!(item_id.get_field_by_name("high").unwrap().as_u64(), Some(0));
+
+    let related = item.get_field_by_name("related_ids").unwrap();
+    assert_eq!(
+        related.as_list().unwrap()[0]
+            .as_message()
+            .unwrap()
+            .get_field_by_name("low")
+            .unwrap()
+            .as_u64(),
+        Some(98_765_432_109)
+    );
+
+    // Two more levels down: repeated inside repeated.
+    let details = item.get_field_by_name("details").unwrap();
+    let detail = &details.as_list().unwrap()[0];
+    let markers = detail
+        .as_message()
+        .unwrap()
+        .get_field_by_name("markers")
+        .unwrap();
+    let marker = &markers.as_list().unwrap()[0];
+    let marker = marker.as_message().unwrap();
+    assert_eq!(
+        marker.get_field_by_name("marker_id").unwrap().as_i64(),
+        Some(7)
+    );
+    assert_eq!(
+        marker.get_field_by_name("marker_version").unwrap().as_i64(),
+        Some(1500)
+    );
+    // proto3 `optional` + NULL column => field stays absent.
+    assert!(!marker.has_field_by_name("expires_at_millis"));
+}
+
+// ===== Proto map from a list of entry structs (engines with no MAP type) =====
+
+/// `metadata` is `map<string, int64>` in fixtures.Nested. Build it the only way
+/// an engine without a MAP type can: `ARRAY<STRUCT<key, value>>`, which arrives
+/// as List<Struct<key: Utf8, value: Int64>>.
+fn map_as_list_batch(entry_null: bool) -> RecordBatch {
+    let entry_fields = Fields::from(vec![
+        Field::new("key", DataType::Utf8, true),
+        Field::new("value", DataType::Int64, true),
+    ]);
+    let entries = StructArray::new(
+        entry_fields,
+        vec![
+            Arc::new(StringArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+        ],
+        // Optionally mark the second entry itself null.
+        Some(arrow_buffer::NullBuffer::from(vec![true, !entry_null])),
+    );
+    let list = ListArray::new(
+        Arc::new(Field::new("item", entries.data_type().clone(), true)),
+        arrow_buffer::OffsetBuffer::new(vec![0, 2].into()),
+        Arc::new(entries) as ArrayRef,
+        None,
+    );
+    RecordBatch::try_from_iter(vec![("metadata", Arc::new(list) as ArrayRef)]).unwrap()
+}
+
+#[test]
+fn proto_map_binds_from_list_of_entry_structs() {
+    let proto = nested_schema();
+    let batch = map_as_list_batch(false);
+    let t = build_transcoder(&batch.schema(), &proto, "fixtures.Nested");
+
+    let values = t.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(values.value(0), &proto, "fixtures.Nested");
+
+    let map = msg.get_field_by_name("metadata").unwrap();
+    let map = map.as_map().unwrap();
+    assert_eq!(map.len(), 2);
+    let get = |k: &str| {
+        map.get(&prost_reflect::MapKey::String(k.to_string()))
+            .and_then(|v| v.as_i64())
+    };
+    assert_eq!(get("alpha"), Some(1));
+    assert_eq!(get("beta"), Some(2));
+}
+
+#[test]
+fn list_backed_map_is_wire_identical_to_map_array() {
+    // The whole premise of accepting the list form is that a proto map encodes
+    // as repeated MapEntry{key=1,value=2}. Prove the two Arrow shapes produce
+    // byte-identical output rather than merely "both decode".
+    let proto = nested_schema();
+
+    let list_batch = map_as_list_batch(false);
+    let list_bytes = build_transcoder(&list_batch.schema(), &proto, "fixtures.Nested")
+        .transcode_arrow(&list_batch)
+        .unwrap();
+
+    let mut builder = MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+    builder.keys().append_value("alpha");
+    builder.values().append_value(1);
+    builder.keys().append_value("beta");
+    builder.values().append_value(2);
+    builder.append(true).unwrap();
+    let map_batch =
+        RecordBatch::try_from_iter(vec![("metadata", Arc::new(builder.finish()) as ArrayRef)])
+            .unwrap();
+    let map_bytes = build_transcoder(&map_batch.schema(), &proto, "fixtures.Nested")
+        .transcode_arrow(&map_batch)
+        .unwrap();
+
+    assert_eq!(list_bytes.value(0), map_bytes.value(0));
+}
+
+#[test]
+fn null_list_entry_is_skipped_not_default_keyed() {
+    // A null entry struct has no key, and proto map keys cannot be absent.
+    // Encoding it would silently add an ""-keyed entry.
+    let proto = nested_schema();
+    let batch = map_as_list_batch(true);
+    let t = build_transcoder(&batch.schema(), &proto, "fixtures.Nested");
+
+    let values = t.transcode_arrow(&batch).unwrap();
+    let msg = decode_message(values.value(0), &proto, "fixtures.Nested");
+
+    let map = msg.get_field_by_name("metadata").unwrap();
+    let map = map.as_map().unwrap();
+    assert_eq!(map.len(), 1, "null entry must be dropped");
+    assert!(map.contains_key(&prost_reflect::MapKey::String("alpha".into())));
+    assert!(!map.contains_key(&prost_reflect::MapKey::String(String::new())));
+}
+
+#[test]
+fn map_from_list_of_non_struct_is_rejected() {
+    let proto = nested_schema();
+    let desc = proto.message("fixtures.Nested").unwrap();
+    let arrow_schema = Schema::new(vec![Field::new(
+        "metadata",
+        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        true,
+    )]);
+
+    let err = infer_mapping(&arrow_schema, &desc, &InferOptions::default())
+        .expect_err("a list of scalars is not a map");
+    assert!(err.to_string().contains("Struct(key, value)"), "{err}");
+}

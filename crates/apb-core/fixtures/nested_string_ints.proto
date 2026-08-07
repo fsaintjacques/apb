@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package fixtures;
+
+// Nested and repeated messages whose 64-bit integers arrive as strings.
+//
+// proto3's canonical JSON encoding renders 64-bit integers as strings, so a
+// system that decodes proto into a structured view surfaces them that way at
+// every level of nesting -- not just on flat top-level columns. This fixture
+// exercises the `Utf8 -> integer` coercion through repeated messages inside
+// repeated messages.
+
+message PairId {
+  uint64 low = 1;
+  uint64 high = 2;
+}
+
+message Marker {
+  int64 marker_id = 1;
+  int64 marker_version = 2;
+  optional int64 expires_at_millis = 3;
+}
+
+message ItemDetail {
+  repeated Marker markers = 1;
+  double weight = 2;
+}
+
+message Item {
+  PairId item_id = 1;
+  string group_id = 2;
+  repeated PairId related_ids = 3;
+  repeated ItemDetail details = 4;
+}
+
+message ItemList {
+  repeated Item items = 1;
+}

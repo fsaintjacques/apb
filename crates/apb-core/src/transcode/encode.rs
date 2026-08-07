@@ -87,6 +87,47 @@ pub enum ScalarKind {
     Utf8AsBytes,
     BinaryAsString,
     Int64AsEnum,
+    // String-encoded integers
+    Utf8AsInt(IntTarget),
+    LargeUtf8AsInt(IntTarget),
+}
+
+/// Integer wire encoding targeted by a string-encoded integer column.
+///
+/// Carried as a parameter of [`ScalarKind::Utf8AsInt`] rather than expanded
+/// into flat variants, which would need 20 of them (2 string widths x 10
+/// integer kinds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntTarget {
+    Int32Varint,
+    Sint32,
+    Sfixed32,
+    Int64Varint,
+    Sint64,
+    Sfixed64,
+    UInt32Varint,
+    Fixed32,
+    UInt64Varint,
+    Fixed64,
+}
+
+impl IntTarget {
+    /// Proto wire type this target encodes to.
+    pub fn wire_type(self) -> u8 {
+        match self {
+            Self::Sfixed32 | Self::Fixed32 => wire::WIRE_FIXED32,
+            Self::Sfixed64 | Self::Fixed64 => wire::WIRE_FIXED64,
+            _ => wire::WIRE_VARINT,
+        }
+    }
+
+    /// Whether the target is an unsigned proto kind.
+    fn is_unsigned(self) -> bool {
+        matches!(
+            self,
+            Self::UInt32Varint | Self::Fixed32 | Self::UInt64Varint | Self::Fixed64
+        )
+    }
 }
 
 impl ScalarKind {
@@ -160,8 +201,101 @@ impl ScalarKind {
             Self::Utf8AsBytes => encode_utf8_as_bytes(array, row, buf),
             Self::BinaryAsString => encode_binary_as_string(array, row, buf),
             Self::Int64AsEnum => encode_int64_as_int32_varint(array, row, buf),
+            Self::Utf8AsInt(target) => {
+                let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
+                encode_str_as_int(arr.value(row), target, row, buf)
+            }
+            Self::LargeUtf8AsInt(target) => {
+                let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+                encode_str_as_int(arr.value(row), target, row, buf)
+            }
         }
     }
+}
+
+// === String-encoded integers ===
+//
+// proto3's canonical JSON encoding renders 64-bit integers as strings, so
+// systems that decode proto into a structured view surface them as string
+// columns. BigQuery is the common case here: a decoded `uint64` arrives as
+// STRING and must reach an integer proto field without a SQL-side CAST.
+
+/// Parse a string-encoded integer and write it with `target`'s wire encoding.
+///
+/// Unsigned targets parse as `u64` first and fall back to `i64` reinterpreted
+/// as two's complement, matching the existing signed<->unsigned crossover
+/// coercion (and the fact that some producers only have a signed integer
+/// type). Narrowing to 32 bits is range-checked and fails the batch, mirroring
+/// the `Int64 -> int32` coercion rather than silently truncating.
+///
+/// The parse is strict: no whitespace trimming, no empty-string-as-zero. A
+/// caller that wants an empty string treated as absent should map it to NULL
+/// in the source query, which is unambiguous.
+fn encode_str_as_int(
+    s: &str,
+    target: IntTarget,
+    row: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let err = |reason: String| EncodeError {
+        row,
+        field: String::new(),
+        reason,
+    };
+
+    if target.is_unsigned() {
+        let v = parse_unsigned(s)
+            .ok_or_else(|| err(format!("string {s:?} is not a valid unsigned integer")))?;
+        match target {
+            IntTarget::UInt64Varint => wire::encode_varint(v, buf),
+            IntTarget::Fixed64 => wire::encode_fixed64(v, buf),
+            IntTarget::UInt32Varint => wire::encode_varint(narrow_u32(v, row)? as u64, buf),
+            IntTarget::Fixed32 => wire::encode_fixed32(narrow_u32(v, row)?, buf),
+            _ => unreachable!("is_unsigned() covers exactly these targets"),
+        }
+    } else {
+        let v = s
+            .parse::<i64>()
+            .map_err(|_| err(format!("string {s:?} is not a valid signed integer")))?;
+        match target {
+            IntTarget::Int64Varint => wire::encode_varint(v as u64, buf),
+            IntTarget::Sint64 => wire::encode_zigzag64(v, buf),
+            IntTarget::Sfixed64 => wire::encode_fixed64(v as u64, buf),
+            // Proto int32 negatives are sign-extended to 64 bits on the wire,
+            // matching encode_int64_as_int32_varint.
+            IntTarget::Int32Varint => wire::encode_varint(narrow_i32(v, row)? as u64, buf),
+            IntTarget::Sint32 => wire::encode_zigzag32(narrow_i32(v, row)?, buf),
+            IntTarget::Sfixed32 => wire::encode_fixed32(narrow_i32(v, row)? as u32, buf),
+            _ => unreachable!("is_unsigned() covers the remaining targets"),
+        }
+    }
+    Ok(())
+}
+
+/// Parse an unsigned integer, accepting a negative literal as its two's
+/// complement reinterpretation (`"-1"` -> `u64::MAX`).
+fn parse_unsigned(s: &str) -> Option<u64> {
+    s.parse::<u64>()
+        .ok()
+        .or_else(|| s.parse::<i64>().ok().map(|v| v as u64))
+}
+
+/// Range-check a parsed value before narrowing to i32.
+fn narrow_i32(v: i64, row: usize) -> Result<i32, EncodeError> {
+    i32::try_from(v).map_err(|_| EncodeError {
+        row,
+        field: String::new(),
+        reason: format!("value {v} out of range for int32"),
+    })
+}
+
+/// Range-check a parsed value before narrowing to u32.
+fn narrow_u32(v: u64, row: usize) -> Result<u32, EncodeError> {
+    u32::try_from(v).map_err(|_| EncodeError {
+        row,
+        field: String::new(),
+        reason: format!("value {v} out of range for uint32"),
+    })
 }
 
 // === Boolean ===

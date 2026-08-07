@@ -169,6 +169,12 @@ pub enum MappingError {
     #[error("google.protobuf.Any field '{proto_field}': any_pack target '{target}' not found in descriptor pool (ensure the payload proto is compiled into the descriptor set)")]
     AnyPackTargetNotFound { proto_field: String, target: String },
 
+    #[error("bytes field '{proto_field}': pack target '{target}' not found in descriptor pool (ensure the payload proto is compiled into the descriptor set)")]
+    PackTargetNotFound { proto_field: String, target: String },
+
+    #[error("field '{proto_field}' declares pack target '{target}' but is not a bytes field (use any_pack for google.protobuf.Any; repeated and map-valued bytes are not supported)")]
+    PackOnNonBytesField { proto_field: String, target: String },
+
     #[error(
         "field '{proto_field}' has any_pack = '{target}' but is not a google.protobuf.Any field"
     )]

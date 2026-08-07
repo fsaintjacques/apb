@@ -28,6 +28,10 @@ pub struct InferOptions {
     /// type_url prefix for packed Any fields (default: `type.googleapis.com`).
     /// Trailing slashes are trimmed; the trimmed prefix must be non-empty.
     pub any_url_prefix: String,
+    /// Payload message names for packed `bytes` fields, keyed by fully
+    /// qualified proto field name (e.g. `"my.pkg.Envelope.value"`).
+    /// Overrides the `(apb).pack` annotation.
+    pub pack: HashMap<String, String>,
 }
 
 impl Default for InferOptions {
@@ -38,6 +42,7 @@ impl Default for InferOptions {
             coerce_all: false,
             any_pack: HashMap::new(),
             any_url_prefix: "type.googleapis.com".to_string(),
+            pack: HashMap::new(),
         }
     }
 }
@@ -54,6 +59,8 @@ struct ApbAnnotations {
     coerce: bool,
     /// Payload message name for a packed google.protobuf.Any field.
     any_pack: Option<String>,
+    /// Payload message name for a packed `bytes` field.
+    pack: Option<String>,
 }
 
 /// Read apb annotations from a proto field descriptor.
@@ -95,6 +102,7 @@ fn read_apb_annotations(field: &FieldDescriptor) -> ApbAnnotations {
         arrow_name: non_empty_string("arrow_name"),
         coerce,
         any_pack: non_empty_string("any_pack"),
+        pack: non_empty_string("pack"),
     }
 }
 
@@ -268,6 +276,65 @@ fn infer_field(
     }))
 }
 
+/// The declared pack target for a field, if any. The caller-side option
+/// (keyed by fully qualified field name) overrides the annotation.
+fn pack_declaration(proto_field: &FieldDescriptor, options: &InferOptions) -> Option<String> {
+    options
+        .pack
+        .get(proto_field.full_name())
+        .cloned()
+        .or_else(|| read_apb_annotations(proto_field).pack)
+}
+
+/// Resolve a packed `bytes` field: the Arrow Struct column is serialized as
+/// `target` and those bytes become the field's value.
+///
+/// No dedicated encoder is needed. A length-delimited embedded message and a
+/// `bytes` field are identical on the wire -- tag, length, payload -- so the
+/// existing message encoder emits exactly the bytes a caller would get by
+/// serializing the payload separately and assigning the result. Only the
+/// resolution rule differs: the payload's shape comes from `target` rather
+/// than from the field's own (non-message) kind.
+fn resolve_packed_bytes(
+    arrow_type: &DataType,
+    proto_field: &FieldDescriptor,
+    target: &str,
+    options: &InferOptions,
+) -> Result<(TypeCheck, FieldShape), MappingError> {
+    let payload = proto_field
+        .parent_pool()
+        .get_message_by_name(target)
+        .ok_or_else(|| MappingError::PackTargetNotFound {
+            proto_field: proto_field.name().to_string(),
+            target: target.to_string(),
+        })?;
+
+    let struct_fields = match arrow_type {
+        DataType::Struct(fields) => fields,
+        _ => {
+            return Err(MappingError::TypeShapeMismatch {
+                field_name: proto_field.name().to_string(),
+                expected: "Struct".to_string(),
+                actual: format!("{arrow_type}"),
+            });
+        }
+    };
+
+    let sub_mapping =
+        infer_from_fields(struct_fields, &payload, options).map_err(|e| MappingError::Nested {
+            proto_field: proto_field.name().to_string(),
+            source: Box::new(e),
+        })?;
+
+    let tc = TypeCheck {
+        arrow_type: arrow_type.clone(),
+        proto_kind: proto_field.kind().clone(),
+        mode: TypeCheckMode::Direct,
+    };
+
+    Ok((tc, FieldShape::Message(Box::new(sub_mapping))))
+}
+
 /// Resolve the FieldShape and TypeCheck for a field, handling scalars,
 /// repeated, map, and nested messages.
 fn resolve_field_shape(
@@ -293,6 +360,19 @@ fn resolve_field_shape(
                 proto_field: proto_field.name().to_string(),
                 target,
             });
+        }
+    }
+
+    // A pack declaration turns a `bytes` field into an embedded message.
+    if let Some(target) = pack_declaration(proto_field, options) {
+        if !matches!(proto_field.kind(), Kind::Bytes) {
+            return Err(MappingError::PackOnNonBytesField {
+                proto_field: proto_field.name().to_string(),
+                target,
+            });
+        }
+        if proto_field.cardinality() != Cardinality::Repeated && !proto_field.is_map() {
+            return resolve_packed_bytes(arrow_type, proto_field, &target, options);
         }
     }
 

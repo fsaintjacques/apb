@@ -2536,3 +2536,176 @@ fn map_from_list_of_non_struct_is_rejected() {
         .expect_err("a list of scalars is not a map");
     assert!(err.to_string().contains("Struct(key, value)"), "{err}");
 }
+
+// ===== Packing a struct column into a `bytes` field =====
+
+const ENVELOPE_BIN: &[u8] = include_bytes!("../../fixtures/envelope.bin");
+
+fn envelope_batch() -> RecordBatch {
+    let payload = StructArray::from(vec![
+        (
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(StringArray::from(vec![Some("alpha")])) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("count", DataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![Some(42)])) as ArrayRef,
+        ),
+    ]);
+    RecordBatch::try_from_iter(vec![
+        (
+            "timestamp",
+            Arc::new(TimestampMillisecondArray::from(vec![Some(1_700_000_000_000)])) as ArrayRef,
+        ),
+        (
+            "tombstone",
+            Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+        ),
+        ("value", Arc::new(payload) as ArrayRef),
+    ])
+    .unwrap()
+}
+
+fn pack_options(field: &str, target: &str) -> InferOptions {
+    let mut pack = std::collections::HashMap::new();
+    pack.insert(field.to_string(), target.to_string());
+    InferOptions {
+        pack,
+        ..InferOptions::default()
+    }
+}
+
+#[test]
+fn struct_column_packs_into_bytes_field() {
+    let proto = ProtoSchema::from_bytes(ENVELOPE_BIN).unwrap();
+    let desc = proto.message("fixtures.Envelope").unwrap();
+    let batch = envelope_batch();
+    let options = pack_options("fixtures.Envelope.value", "fixtures.Payload");
+
+    let mapping = infer_mapping(&batch.schema(), &desc, &options).unwrap();
+    let values = Transcoder::new(&mapping)
+        .unwrap()
+        .transcode_arrow(&batch)
+        .unwrap();
+
+    // Decode with the real envelope: `value` is bytes, and those bytes must
+    // themselves decode as the payload message.
+    let env = decode_message(values.value(0), &proto, "fixtures.Envelope");
+    let inner_bytes = env.get_field_by_name("value").unwrap();
+    let inner_bytes = inner_bytes.as_bytes().unwrap();
+    let inner = decode_message(inner_bytes, &proto, "fixtures.Payload");
+
+    assert_eq!(inner.get_field_by_name("name").unwrap().as_str(), Some("alpha"));
+    assert_eq!(inner.get_field_by_name("count").unwrap().as_i64(), Some(42));
+    assert_eq!(
+        env.get_field_by_name("tombstone").unwrap().as_bool(),
+        Some(false)
+    );
+    let ts = env.get_field_by_name("timestamp").unwrap();
+    assert_eq!(
+        ts.as_message().unwrap().get_field_by_name("seconds").unwrap().as_i64(),
+        Some(1_700_000_000)
+    );
+}
+
+#[test]
+fn packed_bytes_is_byte_identical_to_separate_serialization() {
+    // The premise of packing is that an embedded message and a bytes field are
+    // the same on the wire. Prove the packed output equals what a caller gets
+    // by serializing the payload separately and assigning it -- not merely that
+    // it decodes.
+    let proto = ProtoSchema::from_bytes(ENVELOPE_BIN).unwrap();
+    let batch = envelope_batch();
+
+    let packed = Transcoder::new(
+        &infer_mapping(
+            &batch.schema(),
+            &proto.message("fixtures.Envelope").unwrap(),
+            &pack_options("fixtures.Envelope.value", "fixtures.Payload"),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .transcode_arrow(&batch)
+    .unwrap();
+
+    // Serialize the payload on its own from the same struct column...
+    let payload_batch = RecordBatch::try_from_iter(vec![
+        (
+            "name",
+            Arc::new(StringArray::from(vec![Some("alpha")])) as ArrayRef,
+        ),
+        (
+            "count",
+            Arc::new(Int64Array::from(vec![Some(42)])) as ArrayRef,
+        ),
+    ])
+    .unwrap();
+    let payload_bytes = build_transcoder(&payload_batch.schema(), &proto, "fixtures.Payload")
+        .transcode_arrow(&payload_batch)
+        .unwrap();
+
+    // ...and assign it to the bytes field the ordinary way.
+    let manual_batch = RecordBatch::try_from_iter(vec![
+        (
+            "timestamp",
+            Arc::new(TimestampMillisecondArray::from(vec![Some(1_700_000_000_000)])) as ArrayRef,
+        ),
+        (
+            "tombstone",
+            Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef,
+        ),
+        (
+            "value",
+            Arc::new(BinaryArray::from(vec![Some(payload_bytes.value(0))])) as ArrayRef,
+        ),
+    ])
+    .unwrap();
+    let manual = build_transcoder(&manual_batch.schema(), &proto, "fixtures.Envelope")
+        .transcode_arrow(&manual_batch)
+        .unwrap();
+
+    assert_eq!(packed.value(0), manual.value(0));
+}
+
+#[test]
+fn pack_on_non_bytes_field_is_rejected() {
+    let proto = ProtoSchema::from_bytes(ENVELOPE_BIN).unwrap();
+    let desc = proto.message("fixtures.Envelope").unwrap();
+    let batch = envelope_batch();
+
+    let err = infer_mapping(
+        &batch.schema(),
+        &desc,
+        &pack_options("fixtures.Envelope.tombstone", "fixtures.Payload"),
+    )
+    .expect_err("pack on a bool field must fail");
+    assert!(matches!(err, crate::mapping::MappingError::PackOnNonBytesField { .. }), "{err:?}");
+}
+
+#[test]
+fn pack_target_must_exist_in_the_pool() {
+    let proto = ProtoSchema::from_bytes(ENVELOPE_BIN).unwrap();
+    let desc = proto.message("fixtures.Envelope").unwrap();
+    let batch = envelope_batch();
+
+    let err = infer_mapping(
+        &batch.schema(),
+        &desc,
+        &pack_options("fixtures.Envelope.value", "fixtures.NotHere"),
+    )
+    .expect_err("unknown pack target must fail");
+    assert!(matches!(err, crate::mapping::MappingError::PackTargetNotFound { .. }), "{err:?}");
+}
+
+#[test]
+fn bytes_field_without_pack_still_needs_binary() {
+    // Without a declaration the field keeps its ordinary meaning, so a Struct
+    // column is a shape error rather than an implicit pack.
+    let proto = ProtoSchema::from_bytes(ENVELOPE_BIN).unwrap();
+    let desc = proto.message("fixtures.Envelope").unwrap();
+    let batch = envelope_batch();
+
+    infer_mapping(&batch.schema(), &desc, &InferOptions::default())
+        .expect_err("Struct -> bytes must not bind without a pack declaration");
+}

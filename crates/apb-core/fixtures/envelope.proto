@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package fixtures;
+
+import "google/protobuf/timestamp.proto";
+
+// An envelope that carries a serialized payload in a `bytes` field, the shape
+// used by storage layers that version or tombstone an opaque value.
+//
+// The payload is a known message type, but the envelope does not reference it:
+// the field is plain `bytes`, so producing one normally means serializing the
+// payload separately and assigning the result.
+
+message Payload {
+  string name = 1;
+  int64 count = 2;
+}
+
+message Envelope {
+  google.protobuf.Timestamp timestamp = 1;
+  bool tombstone = 2;
+  bytes value = 3;
+}

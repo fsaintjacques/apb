@@ -55,6 +55,12 @@ enum Command {
         #[arg(long, default_value = "human")]
         format: String,
 
+        /// Pack a `bytes` field from a typed struct column: FIELD=MESSAGE
+        /// (fully qualified). Repeatable. Overrides (apb).pack annotations.
+        /// Use for envelopes that carry a serialized payload in a bytes field.
+        #[arg(long = "pack", value_name = "FIELD=MESSAGE", value_parser = parse_any_pack)]
+        pack: Vec<(String, String)>,
+
         /// Pack a google.protobuf.Any field from a typed struct column:
         /// FIELD=MESSAGE (fully qualified). Repeatable. Overrides
         /// (apb).any_pack annotations.
@@ -122,6 +128,12 @@ enum Command {
         /// Behavior for unknown enum string values: error, default, skip.
         #[arg(long, value_enum, default_value = "error")]
         unknown_enum: CliUnknownEnum,
+
+        /// Pack a `bytes` field from a typed struct column: FIELD=MESSAGE
+        /// (fully qualified). Repeatable. Overrides (apb).pack annotations.
+        /// Use for envelopes that carry a serialized payload in a bytes field.
+        #[arg(long = "pack", value_name = "FIELD=MESSAGE", value_parser = parse_any_pack)]
+        pack: Vec<(String, String)>,
 
         /// Pack a google.protobuf.Any field from a typed struct column:
         /// FIELD=MESSAGE (fully qualified). Repeatable. Overrides
@@ -203,6 +215,7 @@ fn main() {
             ipc,
             strict,
             format,
+            pack,
             any_pack,
             any_url_prefix,
         } => run_validate(
@@ -212,6 +225,7 @@ fn main() {
             ipc,
             strict,
             format,
+            pack,
             any_pack,
             any_url_prefix,
         ),
@@ -231,6 +245,7 @@ fn main() {
             out,
             coerce,
             unknown_enum,
+            pack,
             any_pack,
             any_url_prefix,
         } => run_transcode(
@@ -242,6 +257,7 @@ fn main() {
             out,
             coerce,
             unknown_enum.into(),
+            pack,
             any_pack,
             any_url_prefix,
         ),
@@ -324,6 +340,7 @@ fn run_validate(
     ipc: Option<String>,
     strict: bool,
     format: String,
+    pack: Vec<(String, String)>,
     any_pack: Vec<(String, String)>,
     any_url_prefix: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -338,6 +355,7 @@ fn run_validate(
     let options = InferOptions {
         allow_unmapped_proto: !strict,
         allow_unmapped_arrow: !strict,
+        pack: pack.into_iter().collect(),
         any_pack: any_pack.into_iter().collect(),
         any_url_prefix,
         ..InferOptions::default()
@@ -372,6 +390,7 @@ fn run_transcode(
     out: Option<String>,
     coerce: bool,
     unknown_enum: apb_core::transcode::UnknownEnumBehavior,
+    pack: Vec<(String, String)>,
     any_pack: Vec<(String, String)>,
     any_url_prefix: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -385,6 +404,7 @@ fn run_transcode(
 
     let infer_opts = InferOptions {
         coerce_all: coerce,
+        pack: pack.into_iter().collect(),
         any_pack: any_pack.into_iter().collect(),
         any_url_prefix,
         ..InferOptions::default()

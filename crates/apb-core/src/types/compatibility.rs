@@ -191,6 +191,28 @@ fn check_resolved(arrow_type: &DataType, proto_kind: &Kind) -> TypeCompatibility
             risk: CoercionRisk::RuntimeCheck,
         },
 
+        // === Coercions: string-encoded integers ===
+        // proto3's canonical JSON encoding renders 64-bit integers as strings,
+        // so systems that decode proto into a structured view surface them as
+        // string columns (BigQuery is the common case: a decoded uint64 arrives
+        // as STRING). Parsing is checked at encode time, hence RuntimeCheck;
+        // narrowing to 32 bits is additionally range-checked.
+        (
+            Utf8 | LargeUtf8,
+            Kind::Int32
+            | Kind::Sint32
+            | Kind::Sfixed32
+            | Kind::Int64
+            | Kind::Sint64
+            | Kind::Sfixed64
+            | Kind::Uint32
+            | Kind::Fixed32
+            | Kind::Uint64
+            | Kind::Fixed64,
+        ) => CoercionAvailable {
+            risk: CoercionRisk::RuntimeCheck,
+        },
+
         // === Coercions: enum ===
         (Int64, Kind::Enum(_)) => CoercionAvailable {
             risk: CoercionRisk::Truncation,

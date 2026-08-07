@@ -6,7 +6,7 @@ use prost_reflect::Kind;
 use crate::mapping::{FieldBinding, FieldMapping, FieldShape, OneofMapping};
 use crate::types::TypeCheckMode;
 
-use super::encode::ScalarKind;
+use super::encode::{IntTarget, ScalarKind};
 use super::wire;
 
 /// A precomputed encoding plan for a message.
@@ -388,12 +388,44 @@ fn scalar_wire_type(
 }
 
 /// Select the encoder kind and wire type for a scalar field.
+/// The integer wire encoding for a proto kind, or `None` if it is not an
+/// integer kind.
+fn int_target(proto_kind: &Kind) -> Option<IntTarget> {
+    Some(match proto_kind {
+        Kind::Int32 => IntTarget::Int32Varint,
+        Kind::Sint32 => IntTarget::Sint32,
+        Kind::Sfixed32 => IntTarget::Sfixed32,
+        Kind::Int64 => IntTarget::Int64Varint,
+        Kind::Sint64 => IntTarget::Sint64,
+        Kind::Sfixed64 => IntTarget::Sfixed64,
+        Kind::Uint32 => IntTarget::UInt32Varint,
+        Kind::Fixed32 => IntTarget::Fixed32,
+        Kind::Uint64 => IntTarget::UInt64Varint,
+        Kind::Fixed64 => IntTarget::Fixed64,
+        _ => return None,
+    })
+}
+
 fn select_scalar_encoder(
     arrow_type: &DataType,
     proto_kind: &Kind,
     mode: &TypeCheckMode,
 ) -> Result<(ScalarKind, u8), PlanError> {
     use DataType::*;
+
+    // String-encoded integers: one rule for 2 string widths x 10 integer kinds,
+    // resolved from the proto kind rather than enumerated as 20 match arms.
+    // Placed before the main table; int_target() returns None for every other
+    // Kind (including Bytes and Enum), so the arms below are unaffected.
+    if matches!(mode, TypeCheckMode::Coerce { .. }) {
+        if let Some(target) = int_target(proto_kind) {
+            match arrow_type {
+                Utf8 => return Ok((ScalarKind::Utf8AsInt(target), target.wire_type())),
+                LargeUtf8 => return Ok((ScalarKind::LargeUtf8AsInt(target), target.wire_type())),
+                _ => {}
+            }
+        }
+    }
 
     let result: (ScalarKind, u8) = match (arrow_type, proto_kind, mode) {
         // === Direct lossless ===

@@ -14,6 +14,13 @@ message ApbFieldOptions {
   // Arrow Struct column is serialized as this message and wrapped in the
   // Any with a derived type_url.
   optional string any_pack = 3;
+  // Fully-qualified payload message name for a `bytes` field. The bound Arrow
+  // Struct column is serialized as this message and its bytes become the
+  // field's value. Unlike any_pack there is no envelope: a length-delimited
+  // embedded message and a bytes field are identical on the wire, so the
+  // output is exactly what a caller would get by serializing the payload
+  // separately and assigning the result.
+  optional string pack = 4;
 }
 
 extend google.protobuf.FieldOptions {
